@@ -138,7 +138,12 @@ router.post('/verify-system-password', async (req: Request, res: Response): Prom
     const { password } = req.body;
     
     // Sistem şifresini .env'den al veya sabit hash kullan
-    const SYSTEM_PASSWORD_HASH = process.env.SYSTEM_PASSWORD_HASH || '$2a$10$XQKZvK5P7pZQwVxJYvN8/.rKZvQK5pGxGvB0YvN8vL5K7pZQwVxJY'; // TakipSistemi!123
+    // bcrypt hash'i "$" içerir; bazı barındırma panelleri ve kabuklar bu karakteri
+    // değişken sayıp değeri bozar. Öyle ortamlarda hash base64 olarak
+    // SYSTEM_PASSWORD_HASH_B64 ile verilir.
+    const SYSTEM_PASSWORD_HASH = process.env.SYSTEM_PASSWORD_HASH_B64
+      ? Buffer.from(process.env.SYSTEM_PASSWORD_HASH_B64, 'base64').toString('utf8')
+      : process.env.SYSTEM_PASSWORD_HASH || '$2a$10$XQKZvK5P7pZQwVxJYvN8/.rKZvQK5pGxGvB0YvN8vL5K7pZQwVxJY'; // TakipSistemi!123
     
     // Şifreyi kontrol et
     const isValid = await bcrypt.compare(password, SYSTEM_PASSWORD_HASH);

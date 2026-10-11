@@ -26,6 +26,13 @@ import { sweepPhotoStorageInBackground } from './services/sahaPhoto.service';
 
 dotenv.config();
 
+// Oturum anahtarı olmadan yayına çıkılmaz: anahtar yoksa token'lar herkesin bildiği bir
+// değerle imzalanır ve isteyen herkes kendine yönetici token'ı üretebilir.
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('❌ JWT_SECRET tanımlı değil; sunucu başlatılmıyor.');
+  process.exit(1);
+}
+
 const app = express();
 const server = http.createServer(app);
 
