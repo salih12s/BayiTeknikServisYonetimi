@@ -25,6 +25,11 @@ import {
   IconButton,
   Collapse,
   Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  LinearProgress,
 } from '@mui/material';
 import {
   Search,
@@ -35,6 +40,7 @@ import {
   ExpandMore,
   ExpandLess,
   PhotoCamera,
+  Download,
 } from '@mui/icons-material';
 import { useSnackbar } from '../../context/SnackbarContext';
 import { sahaService } from '../../services/saha.service';
@@ -44,6 +50,7 @@ import { SahaPhoto } from '../../utils/sahaPhoto';
 import { useSahaPhotoCache } from '../../hooks/useSahaPhotoCache';
 import { buildKayitFallbackName } from './sahaPhotoName';
 import PhotoLoadingOverlay from './PhotoLoadingOverlay';
+import { buildPhotoZip, saveBlob } from '../../utils/bulkPhotoDownload';
 
 // Önizleme: liste satırı hazır bir adres (initialSrc) verdiyse doğrudan o gösterilir.
 // Vermediyse (eski biçimdeki kayıt) ya da adres açılamazsa (süresi dolmuş), görüntü
@@ -244,6 +251,69 @@ const SahaKayitlari: React.FC = () => {
   };
 
   const handleSearch = () => applyLoad(1);
+
+  // Toplu fotoğraf indirme: seçili tarih aralığındaki bütün fotoğraflar tek zip olarak iner.
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const bulkAbortRef = React.useRef<AbortController | null>(null);
+
+  const handleBulkDownload = async () => {
+    if (!startDate || !endDate) {
+      showSnackbar('Toplu indirme için başlangıç ve bitiş tarihini seçin.', 'warning');
+      return;
+    }
+    const controller = new AbortController();
+    try {
+      const list = await sahaService.getBulkPhotos({
+        startDate,
+        endDate,
+        sahaElemaniId: selectedSahaElemani || undefined,
+      });
+      if (list.fotolar.length === 0) {
+        showSnackbar(
+          list.atlanan_kayit > 0
+            ? `Bu aralıkta indirilebilir fotoğraf yok (${list.atlanan_kayit} kaydın fotoğrafı henüz taşınmamış).`
+            : 'Bu tarih aralığında fotoğraflı kayıt yok.',
+          'info'
+        );
+        return;
+      }
+      const megabytes = Math.max(1, Math.round(list.toplam_bayt / (1024 * 1024)));
+      if (
+        !window.confirm(
+          `${list.kayit_sayisi} kaydın ${list.fotolar.length} fotoğrafı (yaklaşık ${megabytes} MB) tek dosya olarak indirilecek. Devam edilsin mi?`
+        )
+      ) {
+        return;
+      }
+
+      bulkAbortRef.current = controller;
+      setBulk({ done: 0, total: list.fotolar.length });
+      const result = await buildPhotoZip(
+        list.fotolar,
+        (done, total) => setBulk({ done, total }),
+        controller.signal
+      );
+      saveBlob(result.blob, `saha-fotograflari_${startDate}_${endDate}.zip`);
+      if (result.failed.length > 0) {
+        showSnackbar(
+          `${result.downloaded} fotoğraf indirildi, ${result.failed.length} tanesi indirilemedi (adları zip içindeki İNDİRİLEMEYENLER.txt dosyasında).`,
+          'warning'
+        );
+      } else {
+        showSnackbar(`${result.downloaded} fotoğraf indirildi.`, 'success');
+      }
+    } catch (error: any) {
+      if (controller.signal.aborted) {
+        showSnackbar('Toplu indirme iptal edildi.', 'info');
+      } else {
+        console.error('Toplu indirme hatası:', error);
+        showSnackbar(error?.response?.data?.message || 'Fotoğraflar indirilirken hata oluştu!', 'error');
+      }
+    } finally {
+      bulkAbortRef.current = null;
+      setBulk(null);
+    }
+  };
   const handlePageChange = (newPage: number) => applyLoad(newPage);
 
   const handleToggleToday = () => {
@@ -425,6 +495,29 @@ const SahaKayitlari: React.FC = () => {
                   <Refresh />
                 </Button>
               </Box>
+            </Grid>
+            <Grid item xs={12} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Tooltip
+                title="Başlangıç ve bitiş tarihi arasındaki (en fazla 31 gün) bütün fotoğrafları tek zip dosyası olarak indirir"
+                arrow
+              >
+                <span>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<Download />}
+                    onClick={handleBulkDownload}
+                    disabled={bulk !== null}
+                    sx={{
+                      borderColor: '#0D3282',
+                      color: '#0D3282',
+                      '&:hover': { borderColor: '#082052', bgcolor: 'rgba(13, 50, 130, 0.04)' },
+                    }}
+                  >
+                    SEÇİLİ TARİHLERİN FOTOĞRAFLARINI İNDİR
+                  </Button>
+                </span>
+              </Tooltip>
             </Grid>
           </Grid>
         </Collapse>
@@ -664,6 +757,26 @@ const SahaKayitlari: React.FC = () => {
           </Button>
         </Box>
       )}
+
+      {/* Toplu indirme ilerlemesi */}
+      <Dialog open={bulk !== null} maxWidth="xs" fullWidth>
+        <DialogTitle>Fotoğraflar indiriliyor</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            {bulk ? `${bulk.done} / ${bulk.total} fotoğraf` : ''}
+          </Typography>
+          <LinearProgress
+            variant="determinate"
+            value={bulk && bulk.total > 0 ? (bulk.done / bulk.total) * 100 : 0}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+            İşlem bitene kadar bu sayfayı kapatmayın.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => bulkAbortRef.current?.abort()}>İptal</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Photo Loading Overlay */}
       <PhotoLoadingOverlay open={photoLoading} />

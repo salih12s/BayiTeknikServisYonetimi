@@ -24,6 +24,7 @@
     "@types/react-window": "^1.8.8",
     "axios": "^1.6.2",
     "compression": "^1.8.1",
+    "fflate": "^0.8.2",
     "jspdf": "^3.0.3",
     "jspdf-autotable": "^5.0.2",
     "lodash.debounce": "^4.0.8",

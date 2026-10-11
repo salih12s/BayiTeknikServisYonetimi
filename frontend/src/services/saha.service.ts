@@ -74,6 +74,17 @@ export const sahaService = {
     return response.data;
   },
 
+  // Toplu indirme: iki tarih arasındaki (ikisi de dahil) kayıtların bütün fotoğrafları
+  getBulkPhotos: async (params: { startDate: string; endDate: string; sahaElemaniId?: number }): Promise<{
+    kayit_sayisi: number;
+    atlanan_kayit: number;
+    toplam_bayt: number;
+    fotolar: Array<{ kayit_id: number; name: string; url: string; size_bytes: number }>;
+  }> => {
+    const response = await api.get('/saha/toplu-fotograf', { params, timeout: 60000 });
+    return response.data;
+  },
+
   // Tek kayıdın fotoğraflarını getir (lazy load)
   getKayitPhotos: async (id: number): Promise<SahaPhoto[]> => {
     const response = await api.get(`/saha/kayit-photos/${id}`, { timeout: 60000 });
