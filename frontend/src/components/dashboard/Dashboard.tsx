@@ -27,7 +27,8 @@ const SahaKayitlari = lazy(() => import('../saha/SahaKayitlari.tsx'));
 import Loading from '../common/Loading';
 import ErrorMessage from '../common/ErrorMessage';
 import { useSnackbar } from '../../context/SnackbarContext';
-import { useTheme, useMediaQuery } from '@mui/material';
+import { useTheme, useMediaQuery, Alert } from '@mui/material';
+import { usePhoneDesktopView } from '../../hooks/usePhoneDesktopView';
 import DashboardAppBar from './DashboardAppBar';
 import DashboardDrawer from './DashboardDrawer';
 import DashboardTabs from './DashboardTabs';
@@ -99,6 +100,12 @@ const Dashboard: React.FC = () => {
   const isBayi = user?.role === 'bayi';
   const isAdmin = user?.role === 'admin';
   const isSaha = user?.role === 'saha';
+
+  // Telefon yan çevrilince ofis ekranları bilgisayardaki düzeniyle gösterilir. Saha paneli
+  // telefon için tasarlandığından kapsam dışıdır.
+  const phoneView = usePhoneDesktopView(!isSaha);
+  const [rotateHintClosed, setRotateHintClosed] = useState(false);
+  const showRotateHint = !isSaha && phoneView.phone && !phoneView.landscape && !rotateHintClosed;
 
   // Socket.IO işlem gerçek-zamanlı güncellemeleri ortak hook ile.
   useIslemSocket({
@@ -502,6 +509,12 @@ const Dashboard: React.FC = () => {
           isAdmin={isAdmin}
           onNavigate={handleDrawerNavigation}
         />
+      )}
+
+      {showRotateHint && (
+        <Alert severity="info" onClose={() => setRotateHintClosed(true)} sx={{ borderRadius: 0, py: 0.25 }}>
+          Bilgisayardaki görünüm için telefonu yan çevirin.
+        </Alert>
       )}
 
       <DashboardTabs
