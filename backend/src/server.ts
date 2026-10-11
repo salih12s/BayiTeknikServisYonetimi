@@ -21,6 +21,7 @@ import locationsRoutes from './routes/locations';
 import printerSettingsRoutes from './routes/printerSettings';
 import sahaRoutes from './routes/saha';
 import karalisteRoutes from './routes/karaliste';
+import bayiKayitRoutes from './routes/bayiKayit';
 import { errorHandler } from './middleware/errorHandler';
 import { sweepPhotoStorageInBackground } from './services/sahaPhoto.service';
 
@@ -79,6 +80,10 @@ app.use(cors({
 }));
 
 // JSON body limit - fotoğraf yüklemeleri için 50MB
+// Bayi kayıt formu herkese açıktır; gövdesi küçük tutulur ki giriş yapmamış biri sunucuya
+// büyük istekler yığamasın. Genel (50 MB) ayrıştırıcıdan ÖNCE gelmelidir.
+app.use('/api/bayi-kayit/form', express.json({ limit: '20kb' }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -117,6 +122,7 @@ app.use('/api/locations/ilceler', locationsRoutes);
 app.use('/api/printer-settings', printerSettingsRoutes);
 app.use('/api/saha', sahaRoutes);
 app.use('/api/karaliste', karalisteRoutes);
+app.use('/api/bayi-kayit', bayiKayitRoutes);
 
 // Global error handler — asyncHandler ile sarılmış route'lardan gelen
 // yakalanmamış promise rejection'larını yakalar. Tüm route mount'larından

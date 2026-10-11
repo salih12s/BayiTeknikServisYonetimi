@@ -26,7 +26,7 @@ let statsInFlight: Promise<any> | null = null;
 let statsGeneration = 0;
 const STATS_CACHE_TTL = 15000; // 15 sn
 
-function invalidateStatsCache(): void {
+export function invalidateStatsCache(): void {
   statsCache = undefined;
   statsGeneration++;
 }
