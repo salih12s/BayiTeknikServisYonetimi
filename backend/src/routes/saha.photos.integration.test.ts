@@ -334,6 +334,48 @@ describe('saha fotoğraf uçları (API + MariaDB)', options, () => {
     assert.deepEqual(await queuedKeys(), []);
   });
 
+  it('regresyon: saha elemanı yönetimi yalnızca yöneticiye açık (eskiden her token yapabiliyordu)', async () => {
+    const victim = await sahaUser('kurban');
+    const other = await sahaUser('b');
+    const intruders: Array<[string, string]> = [
+      ['saha', other.token],
+      ['bayi', tokenFor('bayi', 1, 'itest_bayi')],
+      ['user', tokenFor('user', 1, 'itest_user')],
+    ];
+
+    for (const [role, token] of intruders) {
+      const create = await api('POST', '/create', token, { username: `itest_yeni_${role}`, password: 'x' });
+      assert.equal(create.status, 403, `${role} create`);
+      assert.equal((await api('PATCH', `/users/${victim.id}/toggle`, token)).status, 403, `${role} toggle`);
+      assert.equal((await api('DELETE', `/users/${victim.id}`, token)).status, 403, `${role} delete`);
+    }
+    // Hiçbir şey değişmedi: kurban duruyor ve hâlâ aktif, yeni eleman oluşmadı.
+    const { rows } = await db.query(
+      "SELECT username, is_active FROM saha_elemanlari WHERE username LIKE 'itest%' ORDER BY username",
+    );
+    assert.deepEqual(rows, [
+      { username: 'itest_b', is_active: true },
+      { username: 'itest_kurban', is_active: true },
+    ]);
+
+    // Yönetici aynı işlemleri yapabilir.
+    const admin = tokenFor('admin', 1, 'itest_admin');
+    assert.equal((await api('POST', '/create', admin, { username: 'itest_yeni', password: 'x' })).status, 201);
+    assert.equal((await api('PATCH', `/users/${victim.id}/toggle`, admin)).body.user.is_active, false);
+    assert.equal((await api('DELETE', `/users/${victim.id}`, admin)).status, 200);
+  });
+
+  it('bütün saha kayıtlarını ofis (kullanıcı, yönetici) görür; saha elemanı ve bayi 403 alır', async () => {
+    const user = await sahaUser('a');
+    await createKayit(user);
+    for (const route of ['/users', '/all-kayitlar', `/user-kayitlar/${user.username}`]) {
+      assert.equal((await api('GET', route, tokenFor('admin', 1, 'itest_admin'))).status, 200, route);
+      assert.equal((await api('GET', route, tokenFor('user', 1, 'itest_user'))).status, 200, route);
+      assert.equal((await api('GET', route, user.token)).status, 403, route);
+      assert.equal((await api('GET', route, tokenFor('bayi', 1, 'itest_bayi'))).status, 403, route);
+    }
+  });
+
   it('fotoğrafları: sahibi ve yönetici/kullanıcı görür; başka saha elemanı 404, bayi 403 alır', async () => {
     const owner = await sahaUser('a');
     const other = await sahaUser('b');

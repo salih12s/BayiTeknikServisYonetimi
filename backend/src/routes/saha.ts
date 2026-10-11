@@ -75,6 +75,25 @@ const requireSaha: RequestHandler = (req, res, next) => {
   next();
 };
 
+// Saha elemanlarını yönetmek (eklemek, silmek, açıp kapatmak) yalnızca yöneticinin işidir.
+const requireAdmin: RequestHandler = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ message: 'Bu işlem için yönetici yetkisi gerekir' });
+    return;
+  }
+  next();
+};
+
+// Bütün saha kayıtlarını görmek ofis çalışanlarının (kullanıcı ve yönetici) işidir;
+// saha elemanı yalnızca kendi kayıtlarını görür, bayi hiçbirini.
+const requireStaff: RequestHandler = (req, res, next) => {
+  if (req.user?.role === 'saha' || req.user?.role === 'bayi') {
+    res.status(403).json({ message: 'Bu işlem için yetkiniz yok' });
+    return;
+  }
+  next();
+};
+
 // Eski arayüz fotoğrafları base64 olarak kayıt gövdesinde gönderiyordu. Sessizce yok
 // saymak fotoğrafların kaybolmasına yol açar; açık bir hata döner.
 function hasLegacyPhotoPayload(body: { foto_data?: unknown }): boolean {
@@ -161,7 +180,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 // Yeni Saha Elemanı Oluştur (Sadece Admin)
-router.post('/create', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.post('/create', authenticateToken, requireAdmin, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username, password, ad_soyad } = req.body;
 
@@ -196,7 +215,7 @@ router.post('/create', authenticateToken, async (req: Request, res: Response): P
 });
 
 // Tüm Saha Elemanlarını Listele (Admin)
-router.get('/users', authenticateToken, async (_req: Request, res: Response): Promise<void> => {
+router.get('/users', authenticateToken, requireStaff, async (_req: Request, res: Response): Promise<void> => {
   try {
     const users = await query(
       `SELECT 
@@ -220,7 +239,7 @@ router.get('/users', authenticateToken, async (_req: Request, res: Response): Pr
 });
 
 // Saha Elemanını Aktif/Pasif Yap
-router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.patch('/users/:id/toggle', authenticateToken, requireAdmin, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
@@ -245,7 +264,7 @@ router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: R
 });
 
 // Saha Elemanını Sil
-router.delete('/users/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.delete('/users/:id', authenticateToken, requireAdmin, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
@@ -635,7 +654,7 @@ router.get('/kayit-photos/:id', authenticateToken, async (req: Request, res: Res
 });
 
 // Tüm Saha Kayıtlarını Getir (Admin için) - foto_data hariç (performans)
-router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/all-kayitlar', authenticateToken, requireStaff, async (req: Request, res: Response): Promise<void> => {
   try {
     const { search, startDate, endDate, sahaElemaniId, today, page, limit } = req.query;
 
@@ -750,7 +769,7 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
 });
 
 // Saha Elemanının Kayıtlarını Getir (Admin için)
-router.get('/user-kayitlar/:username', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/user-kayitlar/:username', authenticateToken, requireStaff, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username } = req.params;
 
