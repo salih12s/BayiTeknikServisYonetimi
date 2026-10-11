@@ -3,6 +3,7 @@ import { query } from '../db';
 import authMiddleware from '../middleware/auth';
 import { asyncHandler } from '../middleware/asyncHandler';
 import requireIntegerParam from '../middleware/requireIntegerParam';
+import { equalsFold } from '../utils/sqlText';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
@@ -84,22 +85,22 @@ router.get('/check-address', authMiddleware, asyncHandler(async (req: Request, r
   let paramIndex = 1;
 
   if (mahalle) {
-    whereClause += ` AND LOWER(mahalle) = LOWER($${paramIndex})`;
+    whereClause += ` AND ${equalsFold('mahalle', paramIndex)}`;
     params.push(mahalle);
     paramIndex++;
   }
   if (cadde) {
-    whereClause += ` AND LOWER(cadde) = LOWER($${paramIndex})`;
+    whereClause += ` AND ${equalsFold('cadde', paramIndex)}`;
     params.push(cadde);
     paramIndex++;
   }
   if (sokak) {
-    whereClause += ` AND LOWER(sokak) = LOWER($${paramIndex})`;
+    whereClause += ` AND ${equalsFold('sokak', paramIndex)}`;
     params.push(sokak);
     paramIndex++;
   }
   if (kapi_no) {
-    whereClause += ` AND LOWER(kapi_no) = LOWER($${paramIndex})`;
+    whereClause += ` AND ${equalsFold('kapi_no', paramIndex)}`;
     params.push(kapi_no);
     paramIndex++;
   }

@@ -5,6 +5,7 @@ import logger from '../utils/logger';
 import { IslemCreateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import requireIntegerParam from '../middleware/requireIntegerParam';
+import { likeFold } from '../utils/sqlText';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
@@ -113,104 +114,104 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
     let paramIndex = 1;
 
     if (ad_soyad) {
-      whereClause += ` AND LOWER(ad_soyad) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('ad_soyad', paramIndex)}`;
       params.push(`%${ad_soyad}%`);
       paramIndex++;
     }
 
     if (ilce) {
-      whereClause += ` AND LOWER(ilce) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('ilce', paramIndex)}`;
       params.push(`%${ilce}%`);
       paramIndex++;
     }
 
     if (mahalle) {
-      whereClause += ` AND LOWER(mahalle) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('mahalle', paramIndex)}`;
       params.push(`%${mahalle}%`);
       paramIndex++;
     }
 
     if (cadde) {
-      whereClause += ` AND LOWER(cadde) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('cadde', paramIndex)}`;
       params.push(`%${cadde}%`);
       paramIndex++;
     }
 
     if (sokak) {
-      whereClause += ` AND LOWER(sokak) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('sokak', paramIndex)}`;
       params.push(`%${sokak}%`);
       paramIndex++;
     }
 
     if (kapi_no) {
-      whereClause += ` AND LOWER(kapi_no) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('kapi_no', paramIndex)}`;
       params.push(`%${kapi_no}%`);
       paramIndex++;
     }
 
     if (apartman_site) {
-      whereClause += ` AND LOWER(apartman_site) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('apartman_site', paramIndex)}`;
       params.push(`%${apartman_site}%`);
       paramIndex++;
     }
 
     if (blok_no) {
-      whereClause += ` AND LOWER(blok_no) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('blok_no', paramIndex)}`;
       params.push(`%${blok_no}%`);
       paramIndex++;
     }
 
     if (daire_no) {
-      whereClause += ` AND LOWER(daire_no) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('daire_no', paramIndex)}`;
       params.push(`%${daire_no}%`);
       paramIndex++;
     }
 
     if (sabit_tel) {
-      whereClause += ` AND LOWER(sabit_tel) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('sabit_tel', paramIndex)}`;
       params.push(`%${sabit_tel}%`);
       paramIndex++;
     }
 
     if (cep_tel) {
-      whereClause += ` AND (LOWER(cep_tel) LIKE LOWER($${paramIndex}) OR LOWER(yedek_tel) LIKE LOWER($${paramIndex + 1}))`;
+      whereClause += ` AND (${likeFold('cep_tel', paramIndex)} OR ${likeFold('yedek_tel', paramIndex + 1)})`;
       params.push(`%${cep_tel}%`);
       params.push(`%${cep_tel}%`);
       paramIndex += 2;
     }
 
     if (urun) {
-      whereClause += ` AND LOWER(urun) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('urun', paramIndex)}`;
       params.push(`%${urun}%`);
       paramIndex++;
     }
 
     if (marka) {
-      whereClause += ` AND LOWER(marka) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('marka', paramIndex)}`;
       params.push(`%${marka}%`);
       paramIndex++;
     }
 
     if (sikayet) {
-      whereClause += ` AND LOWER(sikayet) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('sikayet', paramIndex)}`;
       params.push(`%${sikayet}%`);
       paramIndex++;
     }
 
     if (teknisyen_ismi) {
-      whereClause += ` AND LOWER(teknisyen_ismi) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('teknisyen_ismi', paramIndex)}`;
       params.push(`%${teknisyen_ismi}%`);
       paramIndex++;
     }
 
     if (yapilan_islem) {
-      whereClause += ` AND LOWER(yapilan_islem) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('yapilan_islem', paramIndex)}`;
       params.push(`%${yapilan_islem}%`);
       paramIndex++;
     }
 
     if (tutar) {
-      whereClause += ` AND LOWER(CAST(tutar AS CHAR)) LIKE LOWER($${paramIndex})`;
+      whereClause += ` AND ${likeFold('CAST(tutar AS CHAR)', paramIndex)}`;
       params.push(`%${tutar}%`);
       paramIndex++;
     }
@@ -304,7 +305,7 @@ router.get('/search-by-name', authMiddleware, async (req: Request, res: Response
       return;
     }
     const result = await query(
-      `SELECT * FROM islemler WHERE LOWER(ad_soyad) LIKE LOWER($1) ORDER BY id DESC LIMIT 200`,
+      `SELECT * FROM islemler WHERE ${likeFold('ad_soyad', 1)} ORDER BY id DESC LIMIT 200`,
       [`%${name}%`]
     );
     res.json(result.rows);

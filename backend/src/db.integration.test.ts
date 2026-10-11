@@ -275,6 +275,36 @@ describe('db (MariaDB entegrasyon)', options, () => {
     }
   });
 
+  // Müşterinin şikâyeti: "bazen büyük harfle yazınca buluyor, bazen küçük harfle".
+  it('regresyon: likeFold aramada noktalı/noktasız i ve harf büyüklüğü fark etmez', async () => {
+    const { likeFold } = await import('./utils/sqlText');
+    const insert =
+      "INSERT INTO islemler (ad_soyad, ilce, mahalle, cadde, sokak, kapi_no, cep_tel, urun, marka, sikayet, created_by) VALUES ($1, 'a', 'b', 'c', 'd', '1', '0', 'u', 'm', 's', 'itest')";
+    await db.query(insert, ['ITEST IŞIK İBRAHİM']);
+    await db.query(insert, ['itest ışıl ibrahim']);
+    await db.query(insert, ['ITEST BAŞKA KİŞİ']);
+
+    const find = async (term: string): Promise<string[]> => {
+      const { rows } = await db.query(
+        `SELECT ad_soyad FROM islemler WHERE created_by = 'itest' AND ${likeFold('ad_soyad', 1)} ORDER BY id`,
+        [`%${term}%`],
+      );
+      return rows.map((row: { ad_soyad: string }) => row.ad_soyad);
+    };
+
+    // Hangi biçimde yazılırsa yazılsın aynı kayıt bulunur.
+    for (const term of ['IŞIK', 'ışık', 'Işık', 'işik', 'İŞİK']) {
+      assert.deepEqual(await find(term), ['ITEST IŞIK İBRAHİM'], `terim: ${term}`);
+    }
+    for (const term of ['İBRAHİM', 'ibrahim', 'IBRAHIM', 'ıbrahım', 'İbrahim', 'i̇brahi̇m']) {
+      assert.deepEqual(await find(term), ['ITEST IŞIK İBRAHİM', 'itest ışıl ibrahim'], `terim: ${term}`);
+    }
+    // Türkçe'ye özgü diğer harfler ayırt edilmeye devam eder: "ş" ile "s" aynı değildir.
+    assert.deepEqual(await find('BASKA'), []);
+    assert.deepEqual(await find('başka'), ['ITEST BAŞKA KİŞİ']);
+    assert.deepEqual(await find('kişi'), ['ITEST BAŞKA KİŞİ']);
+  });
+
   // Beklenen sıra Türk alfabesi DEĞİL, canlıdaki PostgreSQL (en_US.utf8) sırasıdır:
   // "ç" ilk karşılaştırmada "c" sayılır, bu yüzden "Çınar" ("ı" < "u") "Cumhuriyet"ten önce gelir.
   it('orderByText: boşluk yok sayılır, harfler canlıdaki sırayla dizilir', async () => {

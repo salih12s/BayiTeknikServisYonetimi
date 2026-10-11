@@ -19,6 +19,7 @@ import {
   sweepPhotoStorageInBackground,
 } from '../services/sahaPhoto.service';
 import { firstLegacyPhoto, parsePhotoIds, parseUploadRequest } from '../utils/sahaPhotoRules';
+import { likeFold } from '../utils/sqlText';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
@@ -369,12 +370,12 @@ router.get('/kayitlar', authenticateToken, requireSaha, async (req: Request, res
 
     // Arama filtresi - sadece mevcut kolonlarda ara (isim, soyisim, notlar)
     if (search) {
-      const searchLower = (search as string).toLocaleLowerCase('tr-TR');
+      const searchLower = search as string;
       whereSql += ` AND (
-        LOWER(isim) LIKE $${paramIndex} OR
-        LOWER(soyisim) LIKE $${paramIndex} OR
-        LOWER(COALESCE(notlar, '')) LIKE $${paramIndex} OR
-        LOWER(CONCAT(isim, ' ', soyisim)) LIKE $${paramIndex}
+        ${likeFold(`isim`, paramIndex)} OR
+        ${likeFold(`soyisim`, paramIndex)} OR
+        ${likeFold(`COALESCE(notlar, '')`, paramIndex)} OR
+        ${likeFold(`CONCAT(isim, ' ', soyisim)`, paramIndex)}
       )`;
       params.push(`%${searchLower}%`);
       paramIndex++;
@@ -694,12 +695,12 @@ router.get('/all-kayitlar', authenticateToken, requireStaff, async (req: Request
 
     // Arama filtresi - isim, soyisim, notlar alanlarında ara (case-insensitive with Turkish support)
     if (search) {
-      const searchLower = (search as string).toLocaleLowerCase('tr-TR');
+      const searchLower = search as string;
       const filter = ` AND (
-        LOWER(sk.isim) LIKE $${paramIndex} OR 
-        LOWER(sk.soyisim) LIKE $${paramIndex} OR 
-        LOWER(sk.notlar) LIKE $${paramIndex} OR
-        LOWER(CONCAT(sk.isim, ' ', sk.soyisim)) LIKE $${paramIndex}
+        ${likeFold(`sk.isim`, paramIndex)} OR 
+        ${likeFold(`sk.soyisim`, paramIndex)} OR 
+        ${likeFold(`sk.notlar`, paramIndex)} OR
+        ${likeFold(`CONCAT(sk.isim, ' ', sk.soyisim)`, paramIndex)}
       )`;
       sql += filter;
       countQuery += filter;
