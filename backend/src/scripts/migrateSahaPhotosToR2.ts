@@ -15,7 +15,7 @@
  * Kullanım (backend klasöründen):
  *   npx ts-node src/scripts/migrateSahaPhotosToR2.ts upload \
  *     --source-env .env.production --r2-env .env.r2.local --registry <defter.jsonl> \
- *     [--source-db <ad>] [--limit <kayıt sayısı>] [--concurrency 3]
+ *     [--source-db <ad>] [--limit <kayıt sayısı>] [--newest] [--concurrency 3]
  *   npx ts-node src/scripts/migrateSahaPhotosToR2.ts verify \
  *     --source-env .env.production --registry <defter.jsonl> [--source-db <ad>] \
  *     [--check-storage --r2-env .env.r2.local]
@@ -57,6 +57,8 @@ interface Options {
   r2Env?: string;
   remote: boolean;
   checkStorage: boolean;
+  /** En yeni kayıtlardan başla (varsayılan: en eskiden). */
+  newest: boolean;
   limit: number;
   concurrency: number;
 }
@@ -91,6 +93,7 @@ function parseArgs(argv: string[]): Options {
     r2Env: value('--r2-env'),
     remote: argv.includes('--remote'),
     checkStorage: argv.includes('--check-storage'),
+    newest: argv.includes('--newest'),
     limit: count('--limit', Number.MAX_SAFE_INTEGER),
     concurrency: Math.min(count('--concurrency', 3), 8),
   };
@@ -238,7 +241,7 @@ async function upload(options: Options): Promise<boolean> {
 
   try {
     const plan = planMigration(await listSource(source), readRegistry(options.registry));
-    const todo = plan.todo.slice(0, options.limit);
+    const todo = (options.newest ? [...plan.todo].reverse() : plan.todo).slice(0, options.limit);
     console.log(
       `Kaynakta fotoğraflı kayıt: ${plan.done + plan.todo.length} · daha önce taşınmış: ${plan.done} · ` +
         `taşınacak: ${plan.todo.length}${todo.length < plan.todo.length ? ` (bu çalışmada ${todo.length})` : ''}`,
