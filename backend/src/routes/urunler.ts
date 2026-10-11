@@ -1,10 +1,13 @@
 ﻿import { Router } from 'express';
-import { query } from '../db';
+import { query, updateReturning } from '../db';
+import { orderByText } from '../utils/sqlText';
 import { Urun } from '../types';
 import authenticateToken from '../middleware/auth';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = Router();
+router.param('id', requireIntegerParam);
 
 // Tüm ürünleri getir
 router.get('/', authenticateToken, async (_req, res) => {
@@ -16,7 +19,7 @@ router.get('/', authenticateToken, async (_req, res) => {
     });
     
     const result = await query<Urun>(
-      'SELECT * FROM urunler ORDER BY isim ASC'
+      `SELECT * FROM urunler ORDER BY ${orderByText('isim')}`
     );
     res.json(result.rows);
   } catch (error) {
@@ -56,7 +59,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Ürün ismi gerekli' });
     }
 
-    const result = await query<Urun>(
+    const result = await updateReturning<Urun>(
       'UPDATE urunler SET isim = $1 WHERE id = $2 RETURNING *',
       [isim, id]
     );

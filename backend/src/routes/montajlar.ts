@@ -1,10 +1,13 @@
 ﻿import express, { Request, Response } from 'express';
-import { query } from '../db';
+import { query, updateReturning, isUniqueViolation } from '../db';
+import { orderByText } from '../utils/sqlText';
 import auth from '../middleware/auth';
 import { Montaj } from '../types';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // GET all montajlar
 router.get('/', auth, async (_req: Request, res: Response) => {
@@ -16,7 +19,7 @@ router.get('/', auth, async (_req: Request, res: Response) => {
     });
     
     const result = await query<Montaj>(
-      'SELECT * FROM montajlar ORDER BY isim ASC'
+      `SELECT * FROM montajlar ORDER BY ${orderByText('isim')}`
     );
     res.json(result.rows);
   } catch (error) {
@@ -44,7 +47,7 @@ router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
   } catch (error: any) {
     logger.error('Error creating montaj:', error);
     
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       res.status(409).json({ error: 'Bu montaj zaten mevcut' });
       return;
     }
@@ -64,7 +67,7 @@ router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const result = await query<Montaj>(
+    const result = await updateReturning<Montaj>(
       'UPDATE montajlar SET isim = $1 WHERE id = $2 RETURNING *',
       [isim.trim(), id]
     );
@@ -78,7 +81,7 @@ router.put('/:id', auth, async (req: Request, res: Response): Promise<void> => {
   } catch (error: any) {
     logger.error('Error updating montaj:', error);
     
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       res.status(409).json({ error: 'Bu montaj ismi zaten kullanılıyor' });
       return;
     }

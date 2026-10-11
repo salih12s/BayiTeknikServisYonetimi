@@ -6,11 +6,6 @@ import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
 
-import createTables from './bootstrap/createTables';
-import { initLocations } from './bootstrap/initLocations';
-import addNoteNoToAtolyeTable from './bootstrap/addNoteNoToAtolyeTable';
-import addSahaPerformanceIndexes from './bootstrap/addSahaPerformanceIndexes';
-import createKaralisteTable from './bootstrap/createKaralisteTable';
 import authRoutes from './routes/auth';
 import islemlerRoutes from './routes/islemler';
 import teknisyenlerRoutes from './routes/teknisyenler';
@@ -37,6 +32,8 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:3000',
+  'https://crm-mefateknik.com',
+  'https://www.crm-mefateknik.com',
   'https://crm-msssoft.com',
   'https://www.crm-msssoft.com',
   'https://projecrm-production.up.railway.app',
@@ -129,7 +126,7 @@ if (process.env.NODE_ENV === 'production') {
 
 const PORT = process.env.PORT || 5000;
 
-// Global hata yakalayıcılar - process'in çökmesini engelle (Railway restart selini önler)
+// Global hata yakalayıcılar - process'in çökmesini engelle
 process.on('unhandledRejection', (reason) => {
   const message = reason instanceof Error ? reason.message : String(reason);
   console.error('⚠️ Yakalanmamış promise reddi:', message);
@@ -139,48 +136,11 @@ process.on('uncaughtException', (err) => {
   console.error('⚠️ Yakalanmamış istisna:', err.message);
 });
 
-// Retry helper fonksiyonu
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  name: string,
-  retries = 5,
-  delay = 3000
-): Promise<T> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      console.log(`⏳ ${name} bekleniyor... (${i + 1}/${retries})`);
-      if (i === retries - 1) throw err;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-  throw new Error(`${name} başarısız oldu`);
-}
-
-// Tabloları oluştur, migration'ları çalıştır, location data'yı yükle ve sunucuyu başlat
-async function startServer() {
-  try {
-    console.log('🚀 Sunucu başlatılıyor...');
-    
-    await withRetry(() => createTables(), 'Tablo oluşturma');
-    await withRetry(() => addNoteNoToAtolyeTable(), 'Migration');
-    await withRetry(() => initLocations(), 'Location data');
-    await withRetry(() => createKaralisteTable(), 'Karaliste tablosu');
-    await withRetry(() => addSahaPerformanceIndexes(), 'Saha performans indexleri');
-    
-    server.listen(PORT, () => {
-      console.log(`✅ Server ${PORT} portunda çalışıyor`);
-    });
-  } catch (error) {
-    console.error('❌ Başlatma hatası:', error);
-    // Sunucuyu başlat, veritabanı sonra bağlanabilir
-    server.listen(PORT, () => {
-      console.log(`⚠️ Server ${PORT} portunda çalışıyor (veritabanı bağlantısı beklemede)`);
-    });
-  }
-}
-
-startServer();
+// Açılışta şema değişikliği YAPILMAZ: tablolar migrations/mysql altındaki SQL ile
+// bir kez kurulur. Hosting süreci sık sık yeniden başlatır; her açılışta DDL
+// çalıştırmak hem gereksiz hem risklidir. Bağlantı testi db.ts içinde yapılır.
+server.listen(PORT, () => {
+  console.log(`✅ Server ${PORT} portunda çalışıyor`);
+});
 
 export { app, io };

@@ -1,9 +1,12 @@
 ﻿import express, { Request, Response } from 'express';
-import { query } from '../db';
+import { query, updateReturning, isUniqueViolation } from '../db';
+import { orderByText } from '../utils/sqlText';
 import authMiddleware from '../middleware/auth';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // Tüm teknisyenleri getir
 router.get('/', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
@@ -15,7 +18,7 @@ router.get('/', authMiddleware, async (_req: Request, res: Response): Promise<vo
     });
     
     const result = await query(
-      'SELECT * FROM teknisyenler ORDER BY isim ASC'
+      `SELECT * FROM teknisyenler ORDER BY ${orderByText('isim')}`
     );
     res.json(result.rows);
   } catch (error) {
@@ -41,7 +44,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
 
     res.status(201).json(result.rows[0]);
   } catch (error: any) {
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       res.status(400).json({ message: 'Bu teknisyen zaten kayıtlı' });
     } else {
       logger.error('Teknisyen ekleme hatası:', error);
@@ -61,7 +64,7 @@ router.put('/:id', authMiddleware, async (req: Request, res: Response): Promise<
       return;
     }
 
-    const result = await query(
+    const result = await updateReturning(
       'UPDATE teknisyenler SET isim = $1 WHERE id = $2 RETURNING *',
       [isim.trim(), id]
     );
@@ -73,7 +76,7 @@ router.put('/:id', authMiddleware, async (req: Request, res: Response): Promise<
 
     res.json(result.rows[0]);
   } catch (error: any) {
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       res.status(400).json({ message: 'Bu teknisyen ismi zaten kullanılıyor' });
     } else {
       logger.error('Teknisyen güncelleme hatası:', error);

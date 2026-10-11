@@ -1,10 +1,10 @@
-import pool from '../../db';
+import pool, { query } from '../../db';
 import bcrypt from 'bcryptjs';
 
 const updateAdminPassword = async () => {
   try {
     // Önce mevcut admin kullanıcısını sil
-    await pool.query('DELETE FROM admins WHERE username = $1', ['admin']);
+    await query('DELETE FROM admins WHERE username = $1', ['admin']);
     console.log('✓ Eski admin kullanıcısı silindi');
     
     // Yeni hash oluştur
@@ -13,7 +13,7 @@ const updateAdminPassword = async () => {
     console.log('✓ Yeni hash oluşturuldu:', hash);
     
     // Yeni admin kullanıcısı ekle
-    await pool.query(
+    await query(
       'INSERT INTO admins (username, password) VALUES ($1, $2)',
       ['admin', hash]
     );

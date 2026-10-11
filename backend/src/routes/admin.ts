@@ -1,11 +1,13 @@
 ﻿import express, { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { query } from '../db';
+import { query, updateReturning } from '../db';
 import authenticateToken from '../middleware/auth';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // Admin Girişi
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
@@ -74,7 +76,7 @@ router.post('/create-user', authenticateToken, async (req: Request, res: Respons
 
     // Kullanıcıyı kaydet
     const newUser = await query(
-      'INSERT INTO users (username, password, created_at, is_active) VALUES ($1, $2, NOW(), TRUE) RETURNING id, username, created_at, is_active',
+      'INSERT INTO users (username, password, created_at, is_active) VALUES ($1, $2, NOW(6), TRUE) RETURNING id, username, created_at, is_active',
       [username, hashedPassword]
     );
 
@@ -116,7 +118,7 @@ router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: R
   try {
     const { id } = req.params;
 
-    const result = await query(
+    const result = await updateReturning(
       'UPDATE users SET is_active = NOT is_active WHERE id = $1 RETURNING id, username, is_active',
       [id]
     );

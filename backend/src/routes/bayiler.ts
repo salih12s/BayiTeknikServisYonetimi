@@ -1,16 +1,19 @@
 ﻿import express, { Request, Response } from 'express';
-import { query } from '../db';
+import { query, updateReturning, isUniqueViolation } from '../db';
+import { orderByText } from '../utils/sqlText';
 import auth from '../middleware/auth';
 import { Bayi } from '../types';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // GET all bayiler
 router.get('/', auth, async (_req: Request, res: Response) => {
   try {
     const result = await query<Bayi>(
-      'SELECT * FROM bayiler ORDER BY isim ASC'
+      `SELECT * FROM bayiler ORDER BY ${orderByText('isim')}`
     );
     res.json(result.rows);
   } catch (error) {
@@ -40,7 +43,7 @@ router.post('/', auth, async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error('Error creating bayi:', error);
     
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'Bu bayi zaten mevcut' });
     }
     
@@ -58,7 +61,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Bayi ismi gereklidir' });
     }
 
-    const result = await query<Bayi>(
+    const result = await updateReturning<Bayi>(
       'UPDATE bayiler SET isim = $1 WHERE id = $2 RETURNING *',
       [isim.trim(), id]
     );
@@ -71,7 +74,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error('Error updating bayi:', error);
     
-    if (error.code === '23505') {
+    if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'Bu bayi ismi zaten kullanılıyor' });
     }
     

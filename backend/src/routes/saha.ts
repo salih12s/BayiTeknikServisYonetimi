@@ -1,11 +1,30 @@
 ﻿import express, { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { query } from '../db';
+import { query, updateReturning } from '../db';
 import authenticateToken from '../middleware/auth';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
+
+// MySQL "(foto_data IS NOT NULL)" ifadesini 1/0 döndürür; API eskisi gibi true/false verir.
+// MySQL geçersiz bir tarih metnini hata vermeden yok sayar ve filtresiz sonuç döndürür
+// (PostgreSQL hata veriyordu). Bu yüzden tarih filtreleri sorgudan önce doğrulanır.
+const DATE_PARAM = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?Z?)?$/;
+
+function invalidDateParam(...values: unknown[]): boolean {
+  return values.some((value) => {
+    if (value === undefined || value === '') return false;
+    if (typeof value !== 'string' || !DATE_PARAM.test(value)) return true;
+    return Number.isNaN(new Date(value.replace(' ', 'T')).getTime());
+  });
+}
+
+function withPhotoFlag<T extends { has_photos?: unknown }>(row: T): T {
+  return { ...row, has_photos: Boolean(Number(row.has_photos)) };
+}
 
 // Saha Elemanı Girişi
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
@@ -83,7 +102,7 @@ router.post('/create', authenticateToken, async (req: Request, res: Response): P
 
     // Saha elemanını kaydet
     const newUser = await query(
-      'INSERT INTO saha_elemanlari (username, password, ad_soyad, created_at, is_active) VALUES ($1, $2, $3, NOW(), TRUE) RETURNING id, username, ad_soyad, created_at, is_active',
+      'INSERT INTO saha_elemanlari (username, password, ad_soyad, created_at, is_active) VALUES ($1, $2, $3, NOW(6), TRUE) RETURNING id, username, ad_soyad, created_at, is_active',
       [username, hashedPassword, ad_soyad || null]
     );
 
@@ -126,8 +145,8 @@ router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: R
   try {
     const { id } = req.params;
 
-    const result = await query(
-      'UPDATE saha_elemanlari SET is_active = NOT is_active, updated_at = NOW() WHERE id = $1 RETURNING id, username, is_active',
+    const result = await updateReturning(
+      'UPDATE saha_elemanlari SET is_active = NOT is_active, updated_at = NOW(6) WHERE id = $1 RETURNING id, username, is_active',
       [id]
     );
 
@@ -174,7 +193,7 @@ router.post('/kayit', authenticateToken, async (req: Request, res: Response): Pr
     const newRecord = await query(
       `INSERT INTO saha_kayitlari 
         (saha_elemani_id, saha_elemani_username, isim, soyisim, foto_data, notlar, created_at, updated_at) 
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) 
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(6), NOW(6)) 
       RETURNING *`,
       [user.id, user.username, isim, soyisim, foto_data || null, notlar || null]
     );
@@ -194,6 +213,11 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
   try {
     const user = req.user!;
     const { search, startDate, endDate, today, page, limit } = req.query;
+
+    if (invalidDateParam(startDate, endDate)) {
+      res.status(400).json({ message: 'Geçersiz tarih' });
+      return;
+    }
 
     const pageNum = Math.max(1, parseInt(page as string) || 1);
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string) || 50));
@@ -219,7 +243,7 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
 
     // Bugün filtresi (saha elemanının kendi yerel gününe göre değil, server gününe göre)
     if (today === 'true' || today === '1') {
-      whereSql += ` AND created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'`;
+      whereSql += ` AND created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL 1 DAY`;
     }
 
     if (startDate) {
@@ -251,10 +275,8 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
       query(dataQuery, dataParams),
       query(
         `SELECT
-           COUNT(*)::int AS toplam,
-           COUNT(*) FILTER (
-             WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'
-           )::int AS bugun
+           COUNT(*) AS toplam,
+           COUNT(CASE WHEN created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL 1 DAY THEN 1 END) AS bugun
          FROM saha_kayitlari
          WHERE saha_elemani_id = $1`,
         [user.id]
@@ -264,7 +286,7 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
     const total = parseInt(countResult.rows[0].total);
 
     res.json({
-      data: records.rows,
+      data: records.rows.map(withPhotoFlag),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -272,8 +294,8 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
         totalPages: Math.ceil(total / limitNum) || 1
       },
       stats: {
-        toplam: statsResult.rows[0].toplam,
-        bugun: statsResult.rows[0].bugun
+        toplam: Number(statsResult.rows[0].toplam),
+        bugun: Number(statsResult.rows[0].bugun)
       }
     });
   } catch (error) {
@@ -312,9 +334,9 @@ router.put('/kayit/:id', authenticateToken, async (req: Request, res: Response):
     const { isim, soyisim, foto_data, notlar } = req.body;
     const user = req.user!;
 
-    const result = await query(
+    const result = await updateReturning(
       `UPDATE saha_kayitlari 
-       SET isim = $1, soyisim = $2, foto_data = $3, notlar = $4, updated_at = NOW()
+       SET isim = $1, soyisim = $2, foto_data = $3, notlar = $4, updated_at = NOW(6)
        WHERE id = $5 AND saha_elemani_id = $6
        RETURNING *`,
       [isim, soyisim, foto_data, notlar, id, user.id]
@@ -421,6 +443,11 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
   try {
     const { search, startDate, endDate, sahaElemaniId, today, page, limit } = req.query;
 
+    if (invalidDateParam(startDate, endDate)) {
+      res.status(400).json({ message: 'Geçersiz tarih' });
+      return;
+    }
+
     const pageNum = Math.max(1, parseInt(page as string) || 1);
     const limitNum = Math.min(200, Math.max(1, parseInt(limit as string) || 50));
     const offset = (pageNum - 1) * limitNum;
@@ -484,7 +511,7 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
 
     // Bugün filtresi
     if (today === 'true' || today === '1') {
-      const filter = ` AND sk.created_at >= CURRENT_DATE AND sk.created_at < CURRENT_DATE + INTERVAL '1 day'`;
+      const filter = ` AND sk.created_at >= CURRENT_DATE AND sk.created_at < CURRENT_DATE + INTERVAL 1 DAY`;
       sql += filter;
       countQuery += filter;
     }
@@ -499,10 +526,8 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
       query(sql, dataParams),
       query(
         `SELECT
-           COUNT(*)::int AS toplam,
-           COUNT(*) FILTER (
-             WHERE created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'
-           )::int AS bugun
+           COUNT(*) AS toplam,
+           COUNT(CASE WHEN created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL 1 DAY THEN 1 END) AS bugun
          FROM saha_kayitlari`
       ),
     ]);
@@ -510,7 +535,7 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
     const total = parseInt(countResult.rows[0].total);
 
     res.json({
-      data: records.rows,
+      data: records.rows.map(withPhotoFlag),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -518,8 +543,8 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
         totalPages: Math.ceil(total / limitNum)
       },
       stats: {
-        toplam: statsResult.rows[0].toplam,
-        bugun: statsResult.rows[0].bugun
+        toplam: Number(statsResult.rows[0].toplam),
+        bugun: Number(statsResult.rows[0].bugun)
       }
     });
   } catch (error) {
@@ -542,7 +567,7 @@ router.get('/user-kayitlar/:username', authenticateToken, async (req: Request, r
       [username]
     );
 
-    res.json(records.rows);
+    res.json(records.rows.map(withPhotoFlag));
   } catch (error) {
     logger.error('Kullanıcı saha kayıtları getirme hatası:', error);
     res.status(500).json({ message: 'Sunucu hatası' });

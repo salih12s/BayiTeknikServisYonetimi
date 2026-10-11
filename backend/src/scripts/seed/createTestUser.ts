@@ -1,4 +1,4 @@
-import pool from '../../db';
+import { query } from '../../db';
 import bcrypt from 'bcryptjs';
 
 async function createTestUser() {
@@ -7,14 +7,14 @@ async function createTestUser() {
     const password = '123456';
 
     // Önce kullanıcı var mı kontrol et
-    const existingUser = await pool.query(
+    const existingUser = await query(
       'SELECT * FROM users WHERE username = $1',
       [username]
     );
 
     if (existingUser.rows.length > 0) {
       console.log('⚠️  Kullanıcı zaten mevcut, siliniyor...');
-      await pool.query('DELETE FROM users WHERE username = $1', [username]);
+      await query('DELETE FROM users WHERE username = $1', [username]);
     }
 
     // Şifreyi hashle
@@ -22,8 +22,8 @@ async function createTestUser() {
     console.log('🔐 Hash oluşturuldu:', hashedPassword);
 
     // Kullanıcıyı oluştur
-    const result = await pool.query(
-      'INSERT INTO users (username, password, created_at, is_active) VALUES ($1, $2, NOW(), TRUE) RETURNING *',
+    const result = await query(
+      'INSERT INTO users (username, password, created_at, is_active) VALUES ($1, $2, NOW(6), TRUE) RETURNING *',
       [username, hashedPassword]
     );
 
@@ -34,7 +34,7 @@ async function createTestUser() {
     console.log('✓ Şifre doğrulama testi:', isValid ? 'BAŞARILI ✓' : 'BAŞARISIZ ✗');
 
     // Database'den kullanıcıyı çek ve test et
-    const dbUser = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    const dbUser = await query('SELECT * FROM users WHERE username = $1', [username]);
     const dbPasswordValid = await bcrypt.compare(password, dbUser.rows[0].password);
     console.log('✓ Database şifre kontrolü:', dbPasswordValid ? 'BAŞARILI ✓' : 'BAŞARISIZ ✗');
 

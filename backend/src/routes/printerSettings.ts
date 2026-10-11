@@ -4,35 +4,16 @@ import authMiddleware from '../middleware/auth';
 import logger from '../utils/logger';
 
 const router = Router();
-const CACHE_TTL_MS = 5 * 60 * 1000;
 
-type SettingsCacheEntry = {
-  value: unknown;
-  expiresAt: number;
-};
+// Bellek içi önbellek YOK: hosting birden fazla süreç çalıştırabilir ve bir süreçte
+// kaydedilen düzeni diğeri dakikalarca eski haliyle sunabilir. Tablo 13 küçük
+// satırdan ibaret; her istekte okumak ucuzdur.
 
-const settingsCache = new Map<string, SettingsCacheEntry>();
-
-function getCachedSettings(marka: string): { hit: boolean; value: unknown } {
-  const cached = settingsCache.get(marka);
-
-  if (!cached) {
-    return { hit: false, value: null };
-  }
-
-  if (cached.expiresAt <= Date.now()) {
-    settingsCache.delete(marka);
-    return { hit: false, value: null };
-  }
-
-  return { hit: true, value: cached.value };
-}
-
-function setCachedSettings(marka: string, value: unknown): void {
-  settingsCache.set(marka, {
-    value,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
+// Sürücü JSON kolonunu çözülmüş olarak verir; metin gelirse (farklı sunucu/sürücü)
+// burada çözülür. Arayüz her durumda aynı listeyi alır: metin giderse yazdırma
+// ekranı sessizce varsayılan konumlara döner.
+function parseConfig(config: unknown): unknown {
+  return typeof config === 'string' ? JSON.parse(config) : config;
 }
 
 // Türkçe karakterleri doğru normalize et (büyük/küçük harf duyarsız)
@@ -93,24 +74,17 @@ router.get('/:marka', authMiddleware, async (req: Request, res: Response): Promi
     const masterBrand = getMasterBrand(marka);
     console.log('📥 Yazıcı ayarları isteniyor:', marka, '→ Master:', masterBrand);
 
-    const cached = getCachedSettings(masterBrand);
-    if (cached.hit) {
-      res.json(cached.value);
-      return;
-    }
-    
     const result = await query(
       'SELECT config FROM printer_settings WHERE marka = $1',
       [masterBrand]
     );
 
     if (result.rows.length > 0) {
-      console.log('✅ Bulundu: Yazıcı ayarları yüklendi (' + (Array.isArray(result.rows[0].config) ? result.rows[0].config.length + ' alan' : 'config mevcut') + ')');
-      setCachedSettings(masterBrand, result.rows[0].config);
-      res.json(result.rows[0].config);
+      const config = parseConfig(result.rows[0].config);
+      console.log('✅ Bulundu: Yazıcı ayarları yüklendi (' + (Array.isArray(config) ? config.length + ' alan' : 'config mevcut') + ')');
+      res.json(config);
     } else {
       console.log('⚠️ Bulunamadı');
-      setCachedSettings(masterBrand, null);
       res.json(null);
     }
   } catch (error) {
@@ -128,19 +102,18 @@ router.post('/:marka', authMiddleware, async (req: Request, res: Response): Prom
 
     console.log('📝 Yazıcı ayarları kaydediliyor:', marka, '→ Master:', masterBrand);
 
-    const result = await query(
+    await query(
       `INSERT INTO printer_settings (marka, config, updated_at)
-       VALUES ($1, $2, CURRENT_TIMESTAMP)
-       ON CONFLICT (marka) 
-       DO UPDATE SET config = $2, updated_at = CURRENT_TIMESTAMP
-       RETURNING *`,
+       VALUES ($1, $2, CURRENT_TIMESTAMP(6))
+       ON DUPLICATE KEY UPDATE config = VALUES(config), updated_at = CURRENT_TIMESTAMP(6)`,
       [masterBrand, JSON.stringify(config)],
       0
     );
+    const result = await query('SELECT * FROM printer_settings WHERE marka = $1', [masterBrand]);
+    const saved = result.rows[0];
 
     console.log('✅ Kaydedildi (master brand):', masterBrand);
-    setCachedSettings(masterBrand, config);
-    res.json(result.rows[0]);
+    res.json({ ...saved, config: parseConfig(saved.config) });
   } catch (error) {
     logger.error('❌ Yazıcı ayarları kaydetme hatası:', error);
     res.status(500).json({ message: 'Sunucu hatası' });
@@ -153,7 +126,6 @@ router.delete('/:marka', authMiddleware, async (req: Request, res: Response): Pr
     const { marka } = req.params;
     const masterBrand = getMasterBrand(marka);
     await query('DELETE FROM printer_settings WHERE marka = $1', [masterBrand], 0);
-    settingsCache.delete(masterBrand);
     res.json({ message: 'Yazıcı ayarları silindi' });
   } catch (error) {
     logger.error('Yazıcı ayarları silme hatası:', error);

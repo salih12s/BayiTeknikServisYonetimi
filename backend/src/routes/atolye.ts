@@ -1,11 +1,14 @@
 ﻿import express, { Request, Response } from 'express';
-import { query } from '../db';
+import { query, updateReturning } from '../db';
+import { toSqlTimestamp } from '../utils/sqlParams';
 import auth from '../middleware/auth';
 import { Atolye, AtolyeCreateDto, AtolyeUpdateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // === SIMPLE IN-MEMORY CACHE ===
 interface CacheEntry<T> {
@@ -46,7 +49,7 @@ router.get('/', auth, async (req: Request, res: Response) => {
       return res.json(result.rows);
     }
 
-    const countResult = await query('SELECT COUNT(*) FROM atolye');
+    const countResult = await query('SELECT COUNT(*) AS count FROM atolye');
     const totalCount = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalCount / limit);
 
@@ -72,7 +75,8 @@ router.get('/next-id', auth, async (_req: Request, res: Response) => {
       return res.json({ nextId: cache.nextId!.data });
     }
     const result = await query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM atolye');
-    const nextId = result.rows[0].next_id;
+    // MAX(id) + 1 MySQL'de BIGINT (metin) döner; PostgreSQL'deki gibi sayı olarak verilir.
+    const nextId = Number(result.rows[0].next_id);
     cache.nextId = { data: nextId, timestamp: Date.now() };
     return res.json({ nextId });
   } catch (error) {
@@ -90,12 +94,12 @@ router.get('/status-counts', auth, async (_req: Request, res: Response) => {
     const result = await query(`
       SELECT 
         COUNT(*) as total,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'beklemede') as beklemede,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'teslim_edildi') as teslim_edildi,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'siparis_verildi') as siparis_verildi,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'yapildi') as yapildi,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'fabrika_gitti') as fabrika_gitti,
-        COUNT(*) FILTER (WHERE teslim_durumu = 'odeme_bekliyor') as odeme_bekliyor
+        COUNT(CASE WHEN teslim_durumu = 'beklemede' THEN 1 END) as beklemede,
+        COUNT(CASE WHEN teslim_durumu = 'teslim_edildi' THEN 1 END) as teslim_edildi,
+        COUNT(CASE WHEN teslim_durumu = 'siparis_verildi' THEN 1 END) as siparis_verildi,
+        COUNT(CASE WHEN teslim_durumu = 'yapildi' THEN 1 END) as yapildi,
+        COUNT(CASE WHEN teslim_durumu = 'fabrika_gitti' THEN 1 END) as fabrika_gitti,
+        COUNT(CASE WHEN teslim_durumu = 'odeme_bekliyor' THEN 1 END) as odeme_bekliyor
       FROM atolye
     `);
     cache.statusCounts = { data: result.rows[0], timestamp: Date.now() };
@@ -244,7 +248,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
     }
     if (updateDto.yapilma_tarihi !== undefined) {
       updates.push(`yapilma_tarihi = $${paramCounter++}`);
-      values.push(updateDto.yapilma_tarihi);
+      values.push(toSqlTimestamp(updateDto.yapilma_tarihi));
     }
     if (updateDto.kayit_tarihi !== undefined) {
       updates.push(`kayit_tarihi = $${paramCounter++}`);
@@ -258,7 +262,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
     }
 
     // Always update updated_at
-    updates.push(`updated_at = CURRENT_TIMESTAMP`);
+    updates.push(`updated_at = CURRENT_TIMESTAMP(6)`);
     values.push(id);
 
     const sql = `
@@ -268,7 +272,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
       RETURNING *
     `;
 
-    const result = await query<Atolye>(sql, values);
+    const result = await updateReturning<Atolye>(sql, values);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Kayıt bulunamadı' });

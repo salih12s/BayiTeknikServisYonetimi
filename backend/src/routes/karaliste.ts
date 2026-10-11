@@ -2,8 +2,10 @@
 import { query } from '../db';
 import authMiddleware from '../middleware/auth';
 import { asyncHandler } from '../middleware/asyncHandler';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // `createKaralisteTable` Part 2 / P2.D1 ile bootstrap/createKaralisteTable.ts'ye
 // taşındı. server.ts artık doğrudan o dosyadan import eder. Route dosyası yalnız

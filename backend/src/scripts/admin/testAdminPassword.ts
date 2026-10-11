@@ -1,10 +1,10 @@
-import pool from '../../db';
+import pool, { query } from '../../db';
 import bcrypt from 'bcryptjs';
 
 const testAdminPassword = async () => {
   try {
     // Admin kullanıcısının hash'ini al
-    const result = await pool.query('SELECT username, password FROM admins WHERE username = $1', ['admin']);
+    const result = await query('SELECT username, password FROM admins WHERE username = $1', ['admin']);
     
     if (result.rows.length === 0) {
       console.log('Admin kullanıcısı bulunamadı!');

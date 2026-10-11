@@ -1,8 +1,11 @@
 ﻿import { Router } from 'express';
 import { query } from '../db';
+import { orderByText } from '../utils/sqlText';
 import logger from '../utils/logger';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = Router();
+router.param('ilceId', requireIntegerParam);
 
 // Tüm ilçeleri getir
 router.get('/', async (_req, res) => {
@@ -13,7 +16,7 @@ router.get('/', async (_req, res) => {
       'ETag': 'ilceler-v1',
     });
     
-    const result = await query('SELECT * FROM ilceler ORDER BY isim ASC');
+    const result = await query(`SELECT * FROM ilceler ORDER BY ${orderByText('isim')}`);
     res.json(result.rows);
   } catch (error) {
     logger.error('İlçeler getirilirken hata:', error);
@@ -26,7 +29,7 @@ router.get('/:ilceId/mahalleler', async (req, res) => {
   try {
     const { ilceId } = req.params;
     const result = await query(
-      'SELECT * FROM mahalleler WHERE ilce_id = $1 ORDER BY isim ASC',
+      `SELECT * FROM mahalleler WHERE ilce_id = $1 ORDER BY ${orderByText('isim')}`,
       [ilceId]
     );
     res.json(result.rows);

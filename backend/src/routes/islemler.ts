@@ -1,11 +1,13 @@
 ﻿import express, { Request, Response } from 'express';
-import { query } from '../db';
+import { query, updateReturning } from '../db';
 import authMiddleware from '../middleware/auth';
 import logger from '../utils/logger';
 import { IslemCreateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
+import requireIntegerParam from '../middleware/requireIntegerParam';
 
 const router = express.Router();
+router.param('id', requireIntegerParam);
 
 // === STATS CACHE ===
 // /stats sorgusu 7 adet COUNT(*) FILTER içerir; index kullanamaz ve tabloyu
@@ -32,12 +34,12 @@ async function computeStats(): Promise<any> {
   const result = await query(`
     SELECT
       COUNT(*) as total,
-      COUNT(*) FILTER (WHERE is_durumu = 'acik') as acik,
-      COUNT(*) FILTER (WHERE is_durumu = 'parca_bekliyor') as parca_bekliyor,
-      COUNT(*) FILTER (WHERE is_durumu = 'tamamlandi') as tamamlandi,
-      COUNT(*) FILTER (WHERE is_durumu = 'iptal') as iptal,
-      COUNT(*) FILTER (WHERE full_tarih >= CURRENT_DATE AND full_tarih < CURRENT_DATE + INTERVAL '1 day') as bugun,
-      COUNT(*) FILTER (WHERE (yazdirildi IS NULL OR yazdirildi = false)) as yazdirilmamis
+      COUNT(CASE WHEN is_durumu = 'acik' THEN 1 END) as acik,
+      COUNT(CASE WHEN is_durumu = 'parca_bekliyor' THEN 1 END) as parca_bekliyor,
+      COUNT(CASE WHEN is_durumu = 'tamamlandi' THEN 1 END) as tamamlandi,
+      COUNT(CASE WHEN is_durumu = 'iptal' THEN 1 END) as iptal,
+      COUNT(CASE WHEN full_tarih >= CURRENT_DATE AND full_tarih < CURRENT_DATE + INTERVAL 1 DAY THEN 1 END) as bugun,
+      COUNT(CASE WHEN (yazdirildi IS NULL OR yazdirildi = false) THEN 1 END) as yazdirilmamis
     FROM islemler
   `);
   return result.rows[0];
@@ -111,104 +113,104 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
     let paramIndex = 1;
 
     if (ad_soyad) {
-      whereClause += ` AND ad_soyad ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(ad_soyad) LIKE LOWER($${paramIndex})`;
       params.push(`%${ad_soyad}%`);
       paramIndex++;
     }
 
     if (ilce) {
-      whereClause += ` AND ilce ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(ilce) LIKE LOWER($${paramIndex})`;
       params.push(`%${ilce}%`);
       paramIndex++;
     }
 
     if (mahalle) {
-      whereClause += ` AND mahalle ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(mahalle) LIKE LOWER($${paramIndex})`;
       params.push(`%${mahalle}%`);
       paramIndex++;
     }
 
     if (cadde) {
-      whereClause += ` AND cadde ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(cadde) LIKE LOWER($${paramIndex})`;
       params.push(`%${cadde}%`);
       paramIndex++;
     }
 
     if (sokak) {
-      whereClause += ` AND sokak ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(sokak) LIKE LOWER($${paramIndex})`;
       params.push(`%${sokak}%`);
       paramIndex++;
     }
 
     if (kapi_no) {
-      whereClause += ` AND kapi_no ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(kapi_no) LIKE LOWER($${paramIndex})`;
       params.push(`%${kapi_no}%`);
       paramIndex++;
     }
 
     if (apartman_site) {
-      whereClause += ` AND apartman_site ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(apartman_site) LIKE LOWER($${paramIndex})`;
       params.push(`%${apartman_site}%`);
       paramIndex++;
     }
 
     if (blok_no) {
-      whereClause += ` AND blok_no ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(blok_no) LIKE LOWER($${paramIndex})`;
       params.push(`%${blok_no}%`);
       paramIndex++;
     }
 
     if (daire_no) {
-      whereClause += ` AND daire_no ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(daire_no) LIKE LOWER($${paramIndex})`;
       params.push(`%${daire_no}%`);
       paramIndex++;
     }
 
     if (sabit_tel) {
-      whereClause += ` AND sabit_tel ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(sabit_tel) LIKE LOWER($${paramIndex})`;
       params.push(`%${sabit_tel}%`);
       paramIndex++;
     }
 
     if (cep_tel) {
-      whereClause += ` AND (cep_tel ILIKE $${paramIndex} OR yedek_tel ILIKE $${paramIndex + 1})`;
+      whereClause += ` AND (LOWER(cep_tel) LIKE LOWER($${paramIndex}) OR LOWER(yedek_tel) LIKE LOWER($${paramIndex + 1}))`;
       params.push(`%${cep_tel}%`);
       params.push(`%${cep_tel}%`);
       paramIndex += 2;
     }
 
     if (urun) {
-      whereClause += ` AND urun ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(urun) LIKE LOWER($${paramIndex})`;
       params.push(`%${urun}%`);
       paramIndex++;
     }
 
     if (marka) {
-      whereClause += ` AND marka ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(marka) LIKE LOWER($${paramIndex})`;
       params.push(`%${marka}%`);
       paramIndex++;
     }
 
     if (sikayet) {
-      whereClause += ` AND sikayet ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(sikayet) LIKE LOWER($${paramIndex})`;
       params.push(`%${sikayet}%`);
       paramIndex++;
     }
 
     if (teknisyen_ismi) {
-      whereClause += ` AND teknisyen_ismi ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(teknisyen_ismi) LIKE LOWER($${paramIndex})`;
       params.push(`%${teknisyen_ismi}%`);
       paramIndex++;
     }
 
     if (yapilan_islem) {
-      whereClause += ` AND yapilan_islem ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(yapilan_islem) LIKE LOWER($${paramIndex})`;
       params.push(`%${yapilan_islem}%`);
       paramIndex++;
     }
 
     if (tutar) {
-      whereClause += ` AND tutar::text ILIKE $${paramIndex}`;
+      whereClause += ` AND LOWER(CAST(tutar AS CHAR)) LIKE LOWER($${paramIndex})`;
       params.push(`%${tutar}%`);
       paramIndex++;
     }
@@ -220,7 +222,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
     }
 
     if (today === 'true') {
-      whereClause += ` AND full_tarih >= CURRENT_DATE AND full_tarih < CURRENT_DATE + INTERVAL '1 day'`;
+      whereClause += ` AND full_tarih >= CURRENT_DATE AND full_tarih < CURRENT_DATE + INTERVAL 1 DAY`;
     }
 
     if (yazdirilmamis === 'true') {
@@ -302,7 +304,7 @@ router.get('/search-by-name', authMiddleware, async (req: Request, res: Response
       return;
     }
     const result = await query(
-      `SELECT * FROM islemler WHERE ad_soyad ILIKE $1 ORDER BY id DESC LIMIT 200`,
+      `SELECT * FROM islemler WHERE LOWER(ad_soyad) LIKE LOWER($1) ORDER BY id DESC LIMIT 200`,
       [`%${name}%`]
     );
     res.json(result.rows);
@@ -425,10 +427,10 @@ router.put('/:id', authMiddleware, async (req: Request, res: Response): Promise<
       return;
     }
 
-    setClauses.push('updated_at = CURRENT_TIMESTAMP');
+    setClauses.push('updated_at = CURRENT_TIMESTAMP(6)');
     values.push(id);
 
-    const result = await query(
+    const result = await updateReturning(
       `UPDATE islemler SET ${setClauses.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
       values,
       0
@@ -459,8 +461,8 @@ router.patch('/:id/yazdirildi', authMiddleware, async (req: Request, res: Respon
     const { id } = req.params;
     const { yazdirildi } = req.body;
 
-    const result = await query(
-      `UPDATE islemler SET yazdirildi = $1, updated_at = CURRENT_TIMESTAMP
+    const result = await updateReturning(
+      `UPDATE islemler SET yazdirildi = $1, updated_at = CURRENT_TIMESTAMP(6)
        WHERE id = $2 RETURNING *`,
       [Boolean(yazdirildi), id],
       0
@@ -518,10 +520,10 @@ router.patch('/:id/durum', authMiddleware, async (req: Request, res: Response): 
     const { id } = req.params;
     const { is_durumu } = req.body;
 
-    const result = await query(
+    const result = await updateReturning(
       `UPDATE islemler SET 
         is_durumu = $1,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = CURRENT_TIMESTAMP(6)
       WHERE id = $2
       RETURNING *`,
       [is_durumu, id],
