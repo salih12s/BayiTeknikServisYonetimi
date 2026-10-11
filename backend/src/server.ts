@@ -94,6 +94,13 @@ io.on('connection', (socket) => {
 // Socket.IO'yu app'e ekle
 app.set('io', io);
 
+// API yanıtları kişiye özeldir ve her an değişir: tarayıcı da aradaki katmanlar da
+// (barındırmanın CDN'i, LiteSpeed önbelleği) bunları saklamamalıdır.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/islemler', islemlerRoutes);
@@ -125,10 +132,38 @@ if (process.env.NODE_ENV === 'production') {
   const frontendPath = fs.existsSync(path.join(packagedPath, 'index.html'))
     ? packagedPath
     : path.join(__dirname, '../../frontend/dist');
-  app.use(express.static(frontendPath));
-  
+  // /assets altındaki dosyaların adında içerik özeti vardır (index-DXbu_UDa.js): içerik
+  // değişince ad da değişir. Bu yüzden "kalıcı" işaretlenirler ve tarayıcı bir kez
+  // indirdiği dosyayı bir daha sormaz. Eskiden her sayfa açılışında yeniden soruluyordu;
+  // barındırmanın CDN'i kısa arayla aynı dosyaya gelen ikinci isteği ara sıra yanıtsız
+  // bırakıyor ve sayfa boş kalıyordu (2026-10-12, crm-mefateknik.com).
+  app.use(
+    '/assets',
+    express.static(path.join(frontendPath, 'assets'), { immutable: true, maxAge: '1y', index: false }),
+  );
+  // Olmayan bir /assets dosyası için index.html DÖNMEZ: tarayıcı HTML'i betik sanıp
+  // (kalıcı olarak) saklarsa sayfa beyaz kalır. Yeni sürüm yayınlandığında eski sayfası
+  // açık kalan kullanıcıda olur; sayfayı yenileyince düzelir.
+  app.use('/assets', (_req, res) => {
+    res.status(404).type('text/plain').send('Bulunamadı');
+  });
+  // Diğer sabit dosyalar (yazı tipleri, şablonlar) kısa süre saklanır; index.html her
+  // seferinde yeniden sorulur ki yeni sürüm hemen görülsün.
+  const noCache = (res: express.Response): void => {
+    res.setHeader('Cache-Control', 'no-cache');
+  };
+  app.use(
+    express.static(frontendPath, {
+      maxAge: '1h',
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) noCache(res);
+      },
+    }),
+  );
+
   // Serve index.html for all non-API routes
   app.get('*', (_req, res) => {
+    noCache(res);
     res.sendFile(path.join(frontendPath, 'index.html'));
   });
 } else {
