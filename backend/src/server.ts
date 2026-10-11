@@ -5,6 +5,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 
 import authRoutes from './routes/auth';
 import islemlerRoutes from './routes/islemler';
@@ -111,7 +112,12 @@ app.use('/api', errorHandler);
 
 // Serve static files from frontend build (production only)
 if (process.env.NODE_ENV === 'production') {
-  const frontendPath = path.join(__dirname, '../../frontend/dist');
+  // Hostinger paketinde arayüz sunucunun yanındaki "public" klasöründedir
+  // (scripts/package-hostinger.cjs); depodan çalışırken frontend/dist kullanılır.
+  const packagedPath = path.join(__dirname, 'public');
+  const frontendPath = fs.existsSync(path.join(packagedPath, 'index.html'))
+    ? packagedPath
+    : path.join(__dirname, '../../frontend/dist');
   app.use(express.static(frontendPath));
   
   // Serve index.html for all non-API routes

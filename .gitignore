@@ -56,3 +56,6 @@ docs/baseline-outputs/
 # Lint output
 .lint-report.json
 
+
+# Yayın paketleri (scripts/package-hostinger.cjs çıktısı)
+deploy/
