@@ -72,6 +72,7 @@ const Dashboard: React.FC = () => {
   // --- UI / nav ---
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [exporting, setExporting] = useState(false);
   const [showTodayOnly, setShowTodayOnly] = useState(false);
   const [showYazdirilmamis, setShowYazdirilmamis] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
@@ -374,10 +375,25 @@ const Dashboard: React.FC = () => {
 
   // ⚡ xlsx (~400 kB) sadece "Excel İndir"e basılınca indirilir; ana bundle'da yer almaz.
   const handleExport = async () => {
-    const listToExport = tableFilteredIslemler.length > 0 ? tableFilteredIslemler : filteredIslemler;
-    const { exportToExcel } = await import('../../utils/excel.ts');
-    exportToExcel(listToExport);
-    showSnackbar(`${listToExport.length} kayıt Excel'e aktarıldı!`, 'success');
+    if (exporting) return;
+    try {
+      setExporting(true);
+      let listToExport = tableFilteredIslemler.length > 0 ? tableFilteredIslemler : filteredIslemler;
+      // Liste ekrana sayfa sayfa (100'er) gelir. Henüz hepsi yüklenmediyse yalnızca
+      // ekrandakini değil, o anki filtreye uyan kayıtların TAMAMINI sunucudan al.
+      if (hasMore) {
+        const all = await islemService.getAllMatching(getServerFilters());
+        listToExport = [...all].sort((a, b) => b.id - a.id);
+      }
+      const { exportToExcel } = await import('../../utils/excel.ts');
+      exportToExcel(listToExport);
+      showSnackbar(`${listToExport.length} kayıt Excel'e aktarıldı!`, 'success');
+    } catch (error) {
+      console.error('Excel aktarımı sırasında hata:', error);
+      showSnackbar('Excel hazırlanırken hata oluştu, lütfen tekrar deneyin.', 'error');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleTableFilterChange = useCallback((filtered: Islem[]) => {
@@ -542,6 +558,7 @@ const Dashboard: React.FC = () => {
                         variant="outlined"
                         startIcon={<DownloadIcon sx={{ fontSize: '1rem' }} />}
                         onClick={handleExport}
+                        disabled={exporting}
                         size="small"
                         sx={{
                           fontSize: '0.65rem',

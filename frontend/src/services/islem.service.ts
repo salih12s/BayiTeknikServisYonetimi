@@ -8,6 +8,12 @@ export const islemService = {
     return response.data;
   },
 
+  // Filtreye uyan BÜTÜN kayıtlar (sayfalama yok). Liste büyük olabildiği için süre uzun.
+  getAllMatching: async (filters?: FilterParams & { today?: string; yazdirilmamis?: string }): Promise<Islem[]> => {
+    const response = await api.get('/islemler', { params: filters, timeout: 120000 });
+    return Array.isArray(response.data) ? response.data : response.data.data;
+  },
+
   getStats: async (): Promise<{ total: string; acik: string; parca_bekliyor: string; tamamlandi: string; iptal: string; bugun: string; yazdirilmamis: string }> => {
     const response = await api.get('/islemler/stats');
     return response.data;
