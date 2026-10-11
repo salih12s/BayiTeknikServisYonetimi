@@ -846,6 +846,115 @@ describe('saha fotoğraf uçları (API + MariaDB)', options, () => {
     assert.deepEqual(photos.body.fotolar.map((foto: any) => foto.id), [uploaded.id]);
   });
 
+  // ---- toplu fotoğraf indirme listesi ve tarih filtresi
+
+  /** Kaydın tarihini Türkiye saatiyle verilen ana çeker. */
+  async function setCreatedAt(kayitId: number, turkeyTime: string): Promise<void> {
+    await db.query('UPDATE saha_kayitlari SET created_at = $1 WHERE id = $2', [
+      new Date(`${turkeyTime}+03:00`),
+      kayitId,
+    ]);
+  }
+
+  it('toplu fotoğraf: iki gün de dahil, günler Türkiye saatine göre, adlar ad soyad + tarih', async () => {
+    const user = await sahaUser('a');
+    const admin = tokenFor('admin', 1, 'itest_admin');
+    const make = async (isim: string, count: number, turkeyTime: string): Promise<number> => {
+      const uploads = await uploadPhotos(user, count);
+      const id: number = (await createKayit(user, uploads.map((item) => item.id), isim)).body.kayit.id;
+      await setCreatedAt(id, turkeyTime);
+      return id;
+    };
+    await make('Once', 1, '2026-03-09T23:59:59'); // aralıktan bir saniye önce
+    const first = await make('Ilk', 2, '2026-03-10T00:00:00'); // ilk günün ilk anı
+    const last = await make('Son', 1, '2026-03-12T23:59:59'); // son günün son saniyesi
+    await make('Sonra', 1, '2026-03-13T00:00:00'); // aralıktan hemen sonra
+    await createKayit(user, [], 'Fotosuz');
+
+    const list = await api('GET', '/toplu-fotograf?startDate=2026-03-10&endDate=2026-03-12', admin);
+    assert.equal(list.status, 200);
+    assert.equal(list.body.kayit_sayisi, 2);
+    assert.equal(list.body.atlanan_kayit, 0);
+    assert.deepEqual(
+      list.body.fotolar.map((foto: any) => [foto.kayit_id, foto.name]),
+      [
+        [first, 'Ilk_Yılmaz_2026-03-10_1.jpg'],
+        [first, 'Ilk_Yılmaz_2026-03-10_2.jpg'],
+        [last, 'Son_Yılmaz_2026-03-12.jpg'],
+      ],
+    );
+    assert.equal(list.body.toplam_bayt, list.body.fotolar.reduce((sum: number, foto: any) => sum + foto.size_bytes, 0));
+    // Adres fotoğrafın kendisine gider (önizlemeye değil).
+    const [row] = await photoRows(last);
+    assert.equal(list.body.fotolar[2].url, `https://fake.r2/get/${row.object_key}`);
+
+    // Saha elemanına göre süzme.
+    const other = await sahaUser('b');
+    const filtered = await api('GET', `/toplu-fotograf?startDate=2026-03-10&endDate=2026-03-12&sahaElemaniId=${other.id}`, admin);
+    assert.deepEqual(filtered.body.fotolar, []);
+    assert.equal(filtered.body.kayit_sayisi, 0);
+  });
+
+  it('toplu fotoğraf: yalnız ofis kullanabilir; geçersiz ve 31 günü aşan aralık 400', async () => {
+    const user = await sahaUser('a');
+    const admin = tokenFor('admin', 1, 'itest_admin');
+    const route = '/toplu-fotograf?startDate=2026-03-01&endDate=2026-03-31';
+    assert.equal((await api('GET', route, admin)).status, 200);
+    assert.equal((await api('GET', route, tokenFor('user', 1, 'itest_user'))).status, 200);
+    assert.equal((await api('GET', route, user.token)).status, 403);
+    assert.equal((await api('GET', route, tokenFor('bayi', 1, 'itest_bayi'))).status, 403);
+    assert.equal((await api('GET', route)).status, 401);
+
+    for (const query of [
+      '',
+      '?startDate=2026-03-01',
+      '?startDate=2026-03-01&endDate=2026-04-01', // 32 gün
+      '?startDate=2026-03-10&endDate=2026-03-09',
+      '?startDate=2026-02-30&endDate=2026-03-01',
+      '?startDate=2026-03-01&endDate=2026-03-02&sahaElemaniId=abc',
+    ]) {
+      assert.equal((await api('GET', `/toplu-fotograf${query}`, admin)).status, 400, query);
+    }
+  });
+
+  it('toplu fotoğraf: eski biçimdeki (taşınmamış) kayıt sayılır ama listeye girmez', async () => {
+    const user = await sahaUser('a');
+    const inserted = await db.query<{ id: number }>(
+      "INSERT INTO saha_kayitlari (saha_elemani_id, saha_elemani_username, isim, soyisim, foto_data) VALUES ($1, $2, 'Eski', 'Kayit', $3) RETURNING id",
+      [user.id, user.username, '["data:image/jpeg;base64,AAAA"]'],
+    );
+    await setCreatedAt(inserted.rows[0].id, '2026-03-10T12:00:00');
+    const list = await api('GET', '/toplu-fotograf?startDate=2026-03-10&endDate=2026-03-10', tokenFor('admin', 1, 'itest_admin'));
+    assert.deepEqual(list.body, { kayit_sayisi: 0, atlanan_kayit: 1, toplam_bayt: 0, fotolar: [] });
+  });
+
+  it('regresyon: liste tarih filtresinde bitiş günü dahildir (eskiden o günün kayıtları gelmiyordu)', async () => {
+    const user = await sahaUser('a');
+    const admin = tokenFor('admin', 1, 'itest_admin');
+    const ids: Record<string, number> = {};
+    for (const [isim, turkeyTime] of [
+      ['Once', '2026-03-09T23:59:59'],
+      ['IlkGun', '2026-03-10T00:00:00'],
+      ['SonGun', '2026-03-12T18:30:00'],
+      ['Sonra', '2026-03-13T00:00:00'],
+    ]) {
+      ids[isim] = (await createKayit(user, [], isim)).body.kayit.id;
+      await setCreatedAt(ids[isim], turkeyTime);
+    }
+    const expected = [ids.IlkGun, ids.SonGun].sort((a, b) => a - b);
+
+    const all = await api('GET', `/all-kayitlar?startDate=2026-03-10&endDate=2026-03-12&sahaElemaniId=${user.id}`, admin);
+    assert.deepEqual(all.body.data.map((row: any) => row.id).sort((a: number, b: number) => a - b), expected);
+    assert.equal(all.body.pagination.total, 2);
+
+    const own = await api('GET', '/kayitlar?startDate=2026-03-10&endDate=2026-03-12', user.token);
+    assert.deepEqual(own.body.data.map((row: any) => row.id).sort((a: number, b: number) => a - b), expected);
+
+    // Tek gün seçilince o günün kayıtları gelir.
+    const oneDay = await api('GET', `/all-kayitlar?startDate=2026-03-12&endDate=2026-03-12&sahaElemaniId=${user.id}`, admin);
+    assert.deepEqual(oneDay.body.data.map((row: any) => row.id), [ids.SonGun]);
+  });
+
   it('yönetici listeleri (all-kayitlar, user-kayitlar) önizleme adresini verir', async () => {
     const user = await sahaUser('a');
     const uploads = await uploadPhotos(user, 1);

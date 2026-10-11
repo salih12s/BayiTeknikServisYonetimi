@@ -3,13 +3,18 @@ import { describe, it } from 'node:test';
 import {
   MAX_PHOTO_BYTES,
   MAX_THUMB_BYTES,
+  MAX_BULK_DOWNLOAD_DAYS,
+  buildBulkPhotoNames,
   buildDownloadName,
   buildRecordBaseName,
   buildObjectKeys,
   firstLegacyPhoto,
+  parseDayRange,
   parsePhotoIds,
   parseUploadRequest,
   sanitizeFileName,
+  turkeyDay,
+  turkeyDayStart,
 } from './sahaPhotoRules';
 
 const jpeg = { mime_type: 'image/jpeg', size_bytes: 1000, thumb_size_bytes: 100 };
@@ -182,9 +187,10 @@ describe('buildRecordBaseName', () => {
 
   it('ad soyaddan üretilir; tarih yalnızca istenirse eklenir', () => {
     assert.equal(buildRecordBaseName(kayit), 'Ahmet_Yılmaz');
-    assert.equal(buildRecordBaseName(kayit, { withDate: true }), 'Ahmet_Yılmaz_2026-07-28');
+    // Tarih Türkiye saatine göredir: 28 Temmuz 21:30 UTC, Türkiye'de 29 Temmuz 00:30'dur.
+    assert.equal(buildRecordBaseName(kayit, { withDate: true }), 'Ahmet_Yılmaz_2026-07-29');
     assert.equal(
-      buildRecordBaseName({ ...kayit, created_at: '2026-07-28T21:30:00.000Z' }, { withDate: true }),
+      buildRecordBaseName({ ...kayit, created_at: '2026-07-28T10:00:00.000Z' }, { withDate: true }),
       'Ahmet_Yılmaz_2026-07-28',
     );
   });
@@ -193,6 +199,89 @@ describe('buildRecordBaseName', () => {
     assert.equal(buildRecordBaseName({ isim: 'Ahmet' }), 'Ahmet');
     assert.equal(buildRecordBaseName({}), 'fotograf');
     assert.equal(buildRecordBaseName({ isim: null, soyisim: null, created_at: null }, { withDate: true }), 'fotograf');
+  });
+});
+
+describe('Türkiye saatine göre gün', () => {
+  it('turkeyDay: gece yarısından sonraki ilk üç saat UTC\'de önceki gündür', () => {
+    assert.equal(turkeyDay(new Date('2026-10-09T20:59:59Z')), '2026-10-09');
+    assert.equal(turkeyDay(new Date('2026-10-09T21:00:00Z')), '2026-10-10');
+    assert.equal(turkeyDay('2026-10-10T12:00:00.000Z'), '2026-10-10');
+    assert.equal(turkeyDay(null), '');
+    assert.equal(turkeyDay('tarih değil'), '');
+  });
+
+  it('turkeyDayStart: günün başı Türkiye saatiyle 00:00\'dır; olmayan gün reddedilir', () => {
+    assert.equal(turkeyDayStart('2026-10-10')?.toISOString(), '2026-10-09T21:00:00.000Z');
+    for (const value of ['2026-02-30', '2026-13-01', '2026-10-10T00:00:00', '10.10.2026', '', null, 20261010]) {
+      assert.equal(turkeyDayStart(value), null, JSON.stringify(value));
+    }
+  });
+});
+
+describe('parseDayRange', () => {
+  it('iki gün de dahildir: bitiş gününün sonuna kadar', () => {
+    const range = parseDayRange('2026-10-01', '2026-10-03');
+    assert.ok(range.ok);
+    assert.equal(range.value.from.toISOString(), '2026-09-30T21:00:00.000Z');
+    assert.equal(range.value.to.toISOString(), '2026-10-03T21:00:00.000Z');
+  });
+
+  it('tek gün seçilebilir', () => {
+    const range = parseDayRange('2026-10-10', '2026-10-10');
+    assert.ok(range.ok);
+    assert.equal(range.value.to.getTime() - range.value.from.getTime(), 24 * 60 * 60 * 1000);
+  });
+
+  it('sınır: en uzun aralık geçer, bir gün fazlası geçmez', () => {
+    assert.equal(MAX_BULK_DOWNLOAD_DAYS, 31);
+    assert.ok(parseDayRange('2026-10-01', '2026-10-31').ok);
+    assert.ok(!parseDayRange('2026-10-01', '2026-11-01').ok);
+  });
+
+  it('eksik, geçersiz ya da ters aralık reddedilir', () => {
+    assert.ok(!parseDayRange(undefined, '2026-10-10').ok);
+    assert.ok(!parseDayRange('2026-10-10', undefined).ok);
+    assert.ok(!parseDayRange('2026-10-10', '2026-10-09').ok);
+    assert.ok(!parseDayRange('2026-02-30', '2026-03-01').ok);
+    assert.ok(!parseDayRange(['2026-10-01'], '2026-10-02').ok);
+  });
+});
+
+describe('buildBulkPhotoNames', () => {
+  const photo = (kayitId: number, isim: string, mimeType = 'image/jpeg', created = '2026-07-28T10:00:00Z') => ({
+    kayitId,
+    isim,
+    soyisim: 'Yılmaz',
+    created_at: new Date(created),
+    mimeType,
+  });
+
+  it('ad soyad + tarih; kayıtta birden çok fotoğraf varsa sıra numarası', () => {
+    assert.deepEqual(buildBulkPhotoNames([photo(1, 'Ahmet'), photo(2, 'Ayşe'), photo(2, 'Ayşe', 'image/png')]), [
+      'Ahmet_Yılmaz_2026-07-28.jpg',
+      'Ayşe_Yılmaz_2026-07-28_1.jpg',
+      'Ayşe_Yılmaz_2026-07-28_2.png',
+    ]);
+  });
+
+  it('aynı gün aynı adla iki ayrı kayıt: adlar çakışmaz', () => {
+    const names = buildBulkPhotoNames([photo(1, 'Ahmet'), photo(2, 'Ahmet'), photo(2, 'Ahmet'), photo(3, 'Ahmet')]);
+    assert.deepEqual(names, [
+      'Ahmet_Yılmaz_2026-07-28.jpg',
+      'Ahmet_Yılmaz_2026-07-28_(2)_1.jpg',
+      'Ahmet_Yılmaz_2026-07-28_(2)_2.jpg',
+      'Ahmet_Yılmaz_2026-07-28_(3).jpg',
+    ]);
+    assert.equal(new Set(names).size, names.length);
+  });
+
+  it('aynı ad farklı günlerde çakışma sayılmaz; boş liste boş döner', () => {
+    assert.deepEqual(
+      buildBulkPhotoNames([photo(1, 'Ahmet'), photo(2, 'Ahmet', 'image/jpeg', '2026-07-29T10:00:00Z')]),
+      ['Ahmet_Yılmaz_2026-07-28.jpg', 'Ahmet_Yılmaz_2026-07-29.jpg'],
+    );
+    assert.deepEqual(buildBulkPhotoNames([]), []);
   });
 });
 

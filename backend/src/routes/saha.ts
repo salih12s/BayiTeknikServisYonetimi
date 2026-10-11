@@ -11,6 +11,7 @@ import {
   attachPhotosToNewRecord,
   createPendingUploads,
   findUnattachedPhotoIds,
+  listPhotosInRange,
   listRecordPhotos,
   queueRecordPhotos,
   queueUserPhotos,
@@ -18,7 +19,13 @@ import {
   signPreviewUrl,
   sweepPhotoStorageInBackground,
 } from '../services/sahaPhoto.service';
-import { firstLegacyPhoto, parsePhotoIds, parseUploadRequest } from '../utils/sahaPhotoRules';
+import {
+  firstLegacyPhoto,
+  parseDayRange,
+  parsePhotoIds,
+  parseUploadRequest,
+  turkeyDayStart,
+} from '../utils/sahaPhotoRules';
 import { likeFold } from '../utils/sqlText';
 
 const router = express.Router();
@@ -34,6 +41,19 @@ function invalidDateParam(...values: unknown[]): boolean {
     if (typeof value !== 'string' || !DATE_PARAM.test(value)) return true;
     return Number.isNaN(new Date(value.replace(' ', 'T')).getTime());
   });
+}
+
+/**
+ * Tarih filtresinin sınırı. Arayüz gün gönderir ("2026-10-10"); gün Türkiye saatine göre
+ * yorumlanır ve bitiş günü DAHİLDİR (eskiden bitiş günü 00:00'da kesiliyor, o günün
+ * kayıtları listeye girmiyordu). Saat içeren değerler olduğu gibi kullanılır.
+ */
+function dateBound(value: unknown, edge: 'start' | 'end'): { operator: string; value: unknown } {
+  const dayStart = turkeyDayStart(value);
+  if (!dayStart) return { operator: edge === 'start' ? '>=' : '<=', value };
+  return edge === 'start'
+    ? { operator: '>=', value: dayStart }
+    : { operator: '<', value: new Date(dayStart.getTime() + 24 * 60 * 60 * 1000) };
 }
 
 // Kayıt satırının API'ye dönen kolonları. foto_data (eski, veritabanındaki base64
@@ -387,14 +407,16 @@ router.get('/kayitlar', authenticateToken, requireSaha, async (req: Request, res
     }
 
     if (startDate) {
-      whereSql += ` AND created_at >= $${paramIndex}`;
-      params.push(startDate);
+      const bound = dateBound(startDate, 'start');
+      whereSql += ` AND created_at ${bound.operator} $${paramIndex}`;
+      params.push(bound.value);
       paramIndex++;
     }
 
     if (endDate) {
-      whereSql += ` AND created_at <= $${paramIndex}`;
-      params.push(endDate);
+      const bound = dateBound(endDate, 'end');
+      whereSql += ` AND created_at ${bound.operator} $${paramIndex}`;
+      params.push(bound.value);
       paramIndex++;
     }
 
@@ -654,6 +676,34 @@ router.get('/kayit-photos/:id', authenticateToken, async (req: Request, res: Res
   }
 });
 
+// Toplu fotoğraf indirme listesi (ofis): iki tarih arasındaki (ikisi de dahil) kayıtların
+// bütün fotoğrafları, zip içindeki adları ve imzalı adresleriyle. Dosyaları tarayıcı
+// doğrudan depodan indirip zip'ler; fotoğraflar bu sunucudan geçmez.
+router.get('/toplu-fotograf', authenticateToken, requireStaff, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const range = parseDayRange(req.query.startDate, req.query.endDate);
+    if (!range.ok) {
+      res.status(400).json({ message: range.message });
+      return;
+    }
+    const { sahaElemaniId } = req.query;
+    if (sahaElemaniId !== undefined && !/^\d+$/.test(String(sahaElemaniId))) {
+      res.status(400).json({ message: 'Geçersiz saha elemanı' });
+      return;
+    }
+
+    res.json(
+      await listPhotosInRange(
+        range.value.from,
+        range.value.to,
+        sahaElemaniId === undefined ? null : Number(sahaElemaniId),
+      ),
+    );
+  } catch (error) {
+    sendError(res, error, 'Toplu fotoğraf listesi hatası:');
+  }
+});
+
 // Tüm Saha Kayıtlarını Getir (Admin için) - foto_data hariç (performans)
 router.get('/all-kayitlar', authenticateToken, requireStaff, async (req: Request, res: Response): Promise<void> => {
   try {
@@ -710,18 +760,20 @@ router.get('/all-kayitlar', authenticateToken, requireStaff, async (req: Request
 
     // Tarih filtreleri
     if (startDate) {
-      const filter = ` AND sk.created_at >= $${paramIndex}`;
+      const bound = dateBound(startDate, 'start');
+      const filter = ` AND sk.created_at ${bound.operator} $${paramIndex}`;
       sql += filter;
       countQuery += filter;
-      params.push(startDate);
+      params.push(bound.value);
       paramIndex++;
     }
 
     if (endDate) {
-      const filter = ` AND sk.created_at <= $${paramIndex}`;
+      const bound = dateBound(endDate, 'end');
+      const filter = ` AND sk.created_at ${bound.operator} $${paramIndex}`;
       sql += filter;
       countQuery += filter;
-      params.push(endDate);
+      params.push(bound.value);
       paramIndex++;
     }
 

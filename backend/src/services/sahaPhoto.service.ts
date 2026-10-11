@@ -4,6 +4,7 @@ import logger from '../utils/logger';
 import {
   THUMB_MIME_TYPE,
   UploadRequestPhoto,
+  buildBulkPhotoNames,
   buildDownloadName,
   buildRecordBaseName,
   buildObjectKeys,
@@ -312,6 +313,76 @@ export async function listRecordPhotos(kayit: {
       };
     }),
   );
+}
+
+export interface BulkPhotoList {
+  kayit_sayisi: number;
+  /** Fotoğrafı henüz depoya taşınmamış (eski biçimde) olduğu için listeye girmeyen kayıt sayısı. */
+  atlanan_kayit: number;
+  toplam_bayt: number;
+  fotolar: Array<{ kayit_id: number; name: string; url: string; size_bytes: number }>;
+}
+
+/**
+ * `from` (dahil) ile `to` (hariç) arasında açılmış kayıtların bütün fotoğrafları, zip
+ * içindeki adları ve imzalı indirme adresleriyle. Kayıt tarihine göre sıralıdır.
+ */
+export async function listPhotosInRange(
+  from: Date,
+  to: Date,
+  sahaElemaniId: number | null,
+): Promise<BulkPhotoList> {
+  const filter = sahaElemaniId === null ? '' : ' AND k.saha_elemani_id = $3';
+  const params = sahaElemaniId === null ? [from, to] : [from, to, sahaElemaniId];
+
+  const { rows } = await query<{
+    kayit_id: number;
+    isim: string | null;
+    soyisim: string | null;
+    created_at: Date;
+    object_key: string;
+    mime_type: string;
+    size_bytes: number;
+  }>(
+    `SELECT k.id AS kayit_id, k.isim, k.soyisim, k.created_at, f.object_key, f.mime_type, f.size_bytes
+     FROM saha_fotograflari f
+     JOIN saha_kayitlari k ON k.id = f.saha_kaydi_id
+     WHERE k.created_at >= $1 AND k.created_at < $2${filter}
+     ORDER BY k.created_at, k.id, f.sort_order, f.id`,
+    params,
+  );
+  const skipped = await query<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM saha_kayitlari k
+     WHERE k.created_at >= $1 AND k.created_at < $2${filter} AND k.foto_data IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM saha_fotograflari f WHERE f.saha_kaydi_id = k.id)`,
+    params,
+  );
+
+  const names = buildBulkPhotoNames(
+    rows.map((row) => ({
+      kayitId: row.kayit_id,
+      isim: row.isim,
+      soyisim: row.soyisim,
+      created_at: row.created_at,
+      mimeType: row.mime_type,
+    })),
+  );
+  const storage = rows.length > 0 ? requireStorage() : null;
+  const fotolar = await Promise.all(
+    rows.map(async (row, index) => ({
+      kayit_id: row.kayit_id,
+      name: names[index],
+      url: await (storage as PhotoStorage).signRead(row.object_key),
+      size_bytes: row.size_bytes,
+    })),
+  );
+
+  return {
+    kayit_sayisi: new Set(rows.map((row) => row.kayit_id)).size,
+    atlanan_kayit: Number(skipped.rows[0].n),
+    toplam_bayt: rows.reduce((sum, row) => sum + row.size_bytes, 0),
+    fotolar,
+  };
 }
 
 /** Liste satırındaki önizleme adresi; depo ayarlı değilse ya da fotoğraf yoksa undefined. */

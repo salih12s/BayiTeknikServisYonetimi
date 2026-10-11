@@ -158,10 +158,96 @@ export function buildRecordBaseName(
   options: { withDate?: boolean } = {},
 ): string {
   const adSoyad = [kayit.isim, kayit.soyisim].filter(Boolean).join('_');
-  const created =
-    kayit.created_at instanceof Date ? kayit.created_at.toISOString() : String(kayit.created_at ?? '');
-  const tarih = options.withDate ? (/^\d{4}-\d{2}-\d{2}/.exec(created)?.[0] ?? '') : '';
+  const tarih = options.withDate ? turkeyDay(kayit.created_at) : '';
   return [adSoyad, tarih].filter(Boolean).join('_') || 'fotograf';
+}
+
+// Türkiye saati yıl boyu UTC+3'tür (yaz saati uygulaması yok). Kayıt tarihleri
+// veritabanında UTC durur; "hangi gün" sorusu Türkiye saatine göre cevaplanır.
+const TURKEY_OFFSET_MS = 3 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Bir anın Türkiye saatine göre günü ("2026-07-28"); geçersizse boş metin. */
+export function turkeyDay(value: Date | string | null | undefined): string {
+  const date = value instanceof Date ? value : new Date(String(value ?? ''));
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() + TURKEY_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** "YYYY-MM-DD" gününün Türkiye saatiyle başladığı an; geçersizse null. */
+export function turkeyDayStart(day: unknown): Date | null {
+  if (typeof day !== 'string' || !DAY_PATTERN.test(day)) return null;
+  const start = new Date(`${day}T00:00:00+03:00`);
+  // "2026-02-30" gibi olmayan günler JavaScript'te bir sonraki aya kaymasın.
+  return Number.isNaN(start.getTime()) || turkeyDay(start) !== day ? null : start;
+}
+
+/** Toplu fotoğraf indirmede seçilebilecek en uzun aralık (gün). */
+export const MAX_BULK_DOWNLOAD_DAYS = 31;
+
+/**
+ * İki günü (ikisi de dahil) Türkiye saatine göre zaman aralığına çevirir:
+ * `from` ilk günün başı, `to` son günün BİTİŞİ (ertesi günün başı, dahil değil).
+ */
+export function parseDayRange(
+  startDay: unknown,
+  endDay: unknown,
+  maxDays = MAX_BULK_DOWNLOAD_DAYS,
+): Parsed<{ from: Date; to: Date }> {
+  const from = turkeyDayStart(startDay);
+  const lastDay = turkeyDayStart(endDay);
+  if (!from || !lastDay) return { ok: false, message: 'Başlangıç ve bitiş tarihi gerekli' };
+  if (lastDay.getTime() < from.getTime()) {
+    return { ok: false, message: 'Bitiş tarihi başlangıç tarihinden önce olamaz' };
+  }
+  const days = Math.round((lastDay.getTime() - from.getTime()) / DAY_MS) + 1;
+  if (days > maxDays) {
+    return { ok: false, message: `Tarih aralığı en fazla ${maxDays} gün olabilir` };
+  }
+  return { ok: true, value: { from, to: new Date(lastDay.getTime() + DAY_MS) } };
+}
+
+export interface BulkPhoto {
+  kayitId: number;
+  isim: string | null;
+  soyisim: string | null;
+  created_at: Date | string | null;
+  mimeType: string;
+}
+
+/**
+ * Toplu indirmede (zip) her fotoğrafın dosya adı: "Ad_Soyad_tarih.jpg", kayıtta birden
+ * çok fotoğraf varsa "_2", "_3". Aynı gün aynı adla iki AYRI kayıt varsa ikincisine
+ * "_(2)" eklenir: zip içinde iki dosya aynı adı taşıyamaz. Fotoğraflar kayıt kayıt
+ * sıralı gelmelidir.
+ */
+export function buildBulkPhotoNames(photos: BulkPhoto[]): string[] {
+  const totals = new Map<number, number>();
+  for (const photo of photos) totals.set(photo.kayitId, (totals.get(photo.kayitId) ?? 0) + 1);
+
+  const baseByRecord = new Map<number, string>();
+  const usedBases = new Map<string, number>();
+  const seen = new Map<number, number>();
+
+  return photos.map((photo) => {
+    let base = baseByRecord.get(photo.kayitId);
+    if (base === undefined) {
+      const wanted = sanitizeFileName(buildRecordBaseName(photo, { withDate: true })) || 'fotograf';
+      const count = (usedBases.get(wanted) ?? 0) + 1;
+      usedBases.set(wanted, count);
+      base = count === 1 ? wanted : `${wanted}_(${count})`;
+      baseByRecord.set(photo.kayitId, base);
+    }
+    const index = seen.get(photo.kayitId) ?? 0;
+    seen.set(photo.kayitId, index + 1);
+    return buildDownloadName({
+      mimeType: photo.mimeType,
+      baseName: base,
+      index,
+      total: totals.get(photo.kayitId) ?? 1,
+    });
+  });
 }
 
 /**
