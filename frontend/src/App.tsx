@@ -12,6 +12,8 @@ import ErrorBoundary from './components/common/ErrorBoundary';
 // fallback olarak ortak Loading bileşeni kullanılır.
 const Dashboard = React.lazy(() => import('./components/dashboard/Dashboard'));
 const Settings = React.lazy(() => import('./components/settings/Settings'));
+// Bayiye gönderilen linkle açılan, giriş gerektirmeyen kayıt formu.
+const BayiKayitFormu = React.lazy(() => import('./components/bayi/BayiKayitFormu'));
 
 const theme = createTheme({
   palette: {
@@ -52,6 +54,7 @@ const App: React.FC = () => {
               <Suspense fallback={<Loading />}>
                 <Routes>
                   <Route path="/login" element={<Login />} />
+                  <Route path="/bayi-kayit/:token" element={<BayiKayitFormu />} />
                   <Route
                     path="/"
                     element={

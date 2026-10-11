@@ -49,7 +49,7 @@ describe('bayi kayıt linki (API + MariaDB)', options, () => {
     await db.query("DELETE FROM bayiler WHERE isim LIKE 'itest%'"); // linkler FK ile silinir
     await db.query("DELETE FROM ilceler WHERE isim LIKE 'itest%'");
     await db.query("DELETE FROM mahalleler WHERE isim LIKE 'itest%'");
-    await db.query("DELETE FROM urunler WHERE isim LIKE 'itest%'");
+    await db.query("DELETE FROM urunler WHERE TRIM(isim) LIKE 'itest%'");
     await db.query("DELETE FROM markalar WHERE isim LIKE 'itest%'");
     emitted.length = 0;
   }
@@ -57,7 +57,8 @@ describe('bayi kayıt linki (API + MariaDB)', options, () => {
     await cleanup();
     await db.query("INSERT INTO ilceler (ilce_id, isim) VALUES (990001, 'itest ILCE')");
     await db.query("INSERT INTO mahalleler (mahalle_id, ilce_id, isim) VALUES (990001, 990001, 'itest MAHALLE')");
-    await db.query("INSERT INTO urunler (isim) VALUES ('itest URUN')");
+    // Gerçek veride adı yalnızca boşluk olan bir ürün var; 'itest' önekiyle benzeri kurulur.
+    await db.query("INSERT INTO urunler (isim) VALUES ('itest URUN'), ('  itest BOSLUKLU URUN  ')");
     await db.query("INSERT INTO markalar (isim, aktif) VALUES ('itest MARKA', 1), ('itest PASIF MARKA', 0)");
   });
   after(async () => {
@@ -113,6 +114,13 @@ describe('bayi kayıt linki (API + MariaDB)', options, () => {
     assert.ok(opened.body.urunler.includes('itest URUN'));
     assert.ok(opened.body.markalar.includes('itest MARKA'));
     assert.equal(opened.body.markalar.includes('itest PASIF MARKA'), false);
+    // Adlar boşlukları atılmış gelir; adı boş olan seçenek hiç gelmez.
+    assert.ok(opened.body.urunler.includes('itest BOSLUKLU URUN'));
+    assert.ok(opened.body.urunler.every((isim: string) => isim.trim() === isim && isim !== ''));
+    const spaced = await api('POST', `/form/${token}`, undefined, { ...form, urun: 'itest BOSLUKLU URUN' });
+    assert.equal(spaced.status, 201);
+    await db.query("DELETE FROM islemler WHERE urun = 'itest BOSLUKLU URUN'");
+    emitted.length = 0;
 
     const sent = await api('POST', `/form/${token}`, undefined, form);
     assert.equal(sent.status, 201);

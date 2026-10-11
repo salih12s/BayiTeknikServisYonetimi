@@ -17,8 +17,10 @@ import {
   DialogActions,
   Alert,
   Typography,
+  Tooltip,
 } from '@mui/material';
-import { Edit, Add, Delete } from '@mui/icons-material';
+import { Edit, Add, Delete, Link as LinkIcon } from '@mui/icons-material';
+import BayiLinkDialog from './BayiLinkDialog';
 import { Teknisyen, Marka, Bayi, Montaj, Aksesuar, Urun } from '../../types';
 import { teknisyenService } from '../../services/teknisyen.service';
 import { markaService } from '../../services/marka.service';
@@ -36,6 +38,8 @@ const Settings: React.FC = () => {
   const [teknisyenler, setTeknisyenler] = useState<Teknisyen[]>([]);
   const [markalar, setMarkalar] = useState<Marka[]>([]);
   const [bayiler, setBayiler] = useState<Bayi[]>([]);
+  // Kayıt linki penceresi açık olan bayi.
+  const [linkBayi, setLinkBayi] = useState<{ id: number; isim: string } | null>(null);
   const [montajlar, setMontajlar] = useState<Montaj[]>([]);
   const [aksesuarlar, setAksesuarlar] = useState<Aksesuar[]>([]);
   const [urunler, setUrunler] = useState<Urun[]>([]);
@@ -306,6 +310,13 @@ const Settings: React.FC = () => {
                 <ListItem key={bayi.id} sx={{ border: '1px solid #e0e0e0', mb: 1, borderRadius: 1 }}>
                   <ListItemText primary={bayi.isim} />
                   <ListItemSecondaryAction>
+                    {isAdmin && (
+                      <Tooltip title="Bayiye gönderilecek kayıt linki">
+                        <IconButton onClick={() => setLinkBayi({ id: bayi.id, isim: bayi.isim })} sx={{ color: '#0D3282' }}>
+                          <LinkIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     <IconButton onClick={() => handleEdit(bayi.id, bayi.isim)}>
                       <Edit />
                     </IconButton>
@@ -425,6 +436,8 @@ const Settings: React.FC = () => {
           ) : null}
         </List>
       </Paper>
+
+      <BayiLinkDialog bayi={linkBayi} onClose={() => setLinkBayi(null)} />
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>

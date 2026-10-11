@@ -44,7 +44,10 @@ run('frontend tip kontrolü', 'npx', ['tsc', '--noEmit'], { cwd: frontend });
 
 // 2) Arayüz. Adresler göreceli: arayüz ve API aynı sunucudadır. Yereldeki
 //    .env.production başka bir API adresi verse bile burada verilen değer geçerlidir.
-run('arayüz derlemesi', 'npx', ['vite', 'build', '--outDir', path.join(dist, 'public'), '--emptyOutDir'], {
+//    --base=/ : dosyalar sayfaya kök adresle (/assets/...) bağlanır. Varsayılan göreli
+//    adres (./assets/...) /bayi-kayit/<anahtar> gibi iç içe bir sayfada yanlış klasöre
+//    gider ve sayfa boş kalır.
+run('arayüz derlemesi', 'npx', ['vite', 'build', '--base=/', '--outDir', path.join(dist, 'public'), '--emptyOutDir'], {
   cwd: frontend,
   env: { ...process.env, VITE_API_URL: '/api', VITE_SOCKET_URL: '' },
 });

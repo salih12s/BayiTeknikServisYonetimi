@@ -39,6 +39,11 @@ const INVALID_LINK = 'Bu link geçersiz ya da iptal edilmiş. Lütfen firmadan y
 export const BAYI_KAYIT_LIMIT = 30;
 const submissions = createRateLimiter(BAYI_KAYIT_LIMIT, 10 * 60 * 1000);
 
+/** Tanım listesindeki adlar: baştaki/sondaki boşluk atılır, boş ve yinelenen adlar çıkarılır. */
+function cleanNames(rows: Array<{ isim: string }>): string[] {
+  return [...new Set(rows.map((row) => row.isim.trim()).filter(Boolean))];
+}
+
 async function findBayiByToken(token: unknown): Promise<{ id: number; isim: string } | null> {
   if (!isLinkToken(token)) return null;
   const result = await query<{ id: number; isim: string }>(
@@ -115,9 +120,10 @@ router.get('/form/:token', async (req: Request, res: Response): Promise<void> =>
     ]);
     res.json({
       bayi: bayi.isim,
-      ilceler: ilceler.rows,
-      urunler: urunler.rows.map((row) => row.isim),
-      markalar: markalar.rows.map((row) => row.isim),
+      ilceler: ilceler.rows.filter((row) => row.isim.trim()),
+      // Tanım listelerinde adı boş (yalnızca boşluk) kalmış satırlar seçenek olarak gösterilmez.
+      urunler: cleanNames(urunler.rows),
+      markalar: cleanNames(markalar.rows),
     });
   } catch (error) {
     logger.error('Bayi kayıt formu hatası:', error);
@@ -141,13 +147,13 @@ router.post('/form/:token', async (req: Request, res: Response): Promise<void> =
 
     // Listeden seçilen alanlar gerçekten listede mi? (Form değerleri elle değiştirilebilir.)
     const [ilce, urun, marka] = await Promise.all([
-      query<{ ilce_id: number }>('SELECT ilce_id FROM ilceler WHERE isim = $1', [kayit.ilce]),
-      query('SELECT 1 FROM urunler WHERE isim = $1', [kayit.urun]),
-      query('SELECT 1 FROM markalar WHERE isim = $1 AND aktif = 1', [kayit.marka]),
+      query<{ ilce_id: number }>('SELECT ilce_id FROM ilceler WHERE TRIM(isim) = $1', [kayit.ilce]),
+      query('SELECT 1 FROM urunler WHERE TRIM(isim) = $1', [kayit.urun]),
+      query('SELECT 1 FROM markalar WHERE TRIM(isim) = $1 AND aktif = 1', [kayit.marka]),
     ]);
     const mahalle =
       ilce.rows.length > 0
-        ? await query('SELECT 1 FROM mahalleler WHERE ilce_id = $1 AND isim = $2', [
+        ? await query('SELECT 1 FROM mahalleler WHERE ilce_id = $1 AND TRIM(isim) = $2', [
             ilce.rows[0].ilce_id,
             kayit.mahalle,
           ])
