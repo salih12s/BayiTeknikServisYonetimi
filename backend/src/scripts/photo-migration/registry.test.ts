@@ -3,7 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { RegistryEntry, appendRegistry, planMigration, readRegistry } from './registry';
+import {
+  RegistryEntry,
+  appendRegistry,
+  planMigration,
+  readRegistry,
+  staleObjectKeys,
+} from './registry';
 
 function entry(kayitId: number, fingerprint: string, failed: RegistryEntry['failed'] = []): RegistryEntry {
   return { kayit_id: kayitId, fingerprint, migrated_at: '2026-10-11T00:00:00.000Z', photos: [], failed };
@@ -49,6 +55,50 @@ describe('kayıt defteri', () => {
     fs.appendFileSync(file, 'bozuk satır\n');
     appendRegistry(file, entry(2, 'b'));
     assert.throws(() => readRegistry(file), /satır 2/);
+  });
+});
+
+describe('staleObjectKeys', () => {
+  const photo = (key: string, thumb: string | null = `${key}_k`) => ({
+    sort_order: 0,
+    object_key: key,
+    thumb_key: thumb,
+    original_name: null,
+    mime_type: 'image/jpeg',
+    size_bytes: 1,
+    thumb_size_bytes: thumb ? 1 : null,
+    checksum_sha256: 'x',
+    original_bytes: 1,
+    outcome: 'resized' as const,
+  });
+  const withPhotos = (kayitId: number, keys: string[]): RegistryEntry => ({
+    ...entry(kayitId, 'f'),
+    photos: keys.map((key) => photo(key)),
+  });
+
+  it('yeniden taşınan kaydın yalnızca eski sürümündeki dosyalar artıktır', () => {
+    const history = [
+      withPhotos(1, ['a', 'b']),
+      withPhotos(2, ['c']),
+      withPhotos(1, ['b', 'd']), // kayıt 1 değişti: "a" gitti, "b" kaldı, "d" geldi
+    ];
+    assert.deepEqual(staleObjectKeys(history), ['a', 'a_k']);
+  });
+
+  it('hiçbir kayıt yeniden taşınmadıysa artık dosya yoktur', () => {
+    assert.deepEqual(staleObjectKeys([withPhotos(1, ['a']), withPhotos(2, ['b'])]), []);
+    assert.deepEqual(staleObjectKeys([]), []);
+  });
+
+  it('kaynakta silinen kaydın dosyaları artıktır; başka kaydın kullandığı dosya korunur', () => {
+    const history = [withPhotos(1, ['a']), withPhotos(2, ['b']), withPhotos(3, ['a'])];
+    // Kayıt 1 silindi ama "a" dosyasını kayıt 3 de kullanıyor: silinmemeli.
+    assert.deepEqual(staleObjectKeys(history, [1, 2]), ['b', 'b_k']);
+  });
+
+  it('önizlemesi olmayan fotoğrafta yalnızca dosyanın kendisi listelenir', () => {
+    const history = [{ ...entry(1, 'f'), photos: [photo('a', null)] }, withPhotos(1, ['z'])];
+    assert.deepEqual(staleObjectKeys(history), ['a']);
   });
 });
 

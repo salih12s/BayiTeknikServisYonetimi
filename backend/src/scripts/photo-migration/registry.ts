@@ -37,26 +37,60 @@ export interface SourceRecord {
   fingerprint: string;
 }
 
-/** Defteri okur; her kayıt için EN SON satır geçerlidir. Dosya yoksa defter boştur. */
-export function readRegistry(file: string): Map<number, RegistryEntry> {
-  const entries = new Map<number, RegistryEntry>();
-  if (!fs.existsSync(file)) return entries;
+/** Defterin bütün satırları, yazıldıkları sırayla. Dosya yoksa boştur. */
+export function readRegistryHistory(file: string): RegistryEntry[] {
+  const history: RegistryEntry[] = [];
+  if (!fs.existsSync(file)) return history;
 
   const lines = fs.readFileSync(file, 'utf8').split('\n');
   lines.forEach((line, index) => {
     if (!line.trim()) return;
-    let entry: RegistryEntry;
     try {
-      entry = JSON.parse(line) as RegistryEntry;
+      history.push(JSON.parse(line) as RegistryEntry);
     } catch {
       // Yazarken kesilmiş (yarım) son satır yok sayılır: o kayıt yeniden taşınır.
       // Ortadaki bozuk satır ise defterin elle bozulduğunu gösterir.
       if (index >= lines.length - 2) return;
       throw new Error(`Kayıt defteri bozuk: ${file} satır ${index + 1}`);
     }
-    entries.set(entry.kayit_id, entry);
   });
+  return history;
+}
+
+/** Defteri okur; her kayıt için EN SON satır geçerlidir. Dosya yoksa defter boştur. */
+export function readRegistry(file: string): Map<number, RegistryEntry> {
+  const entries = new Map<number, RegistryEntry>();
+  for (const entry of readRegistryHistory(file)) entries.set(entry.kayit_id, entry);
   return entries;
+}
+
+function keysOf(entry: RegistryEntry): string[] {
+  return entry.photos.flatMap((photo) =>
+    photo.thumb_key ? [photo.object_key, photo.thumb_key] : [photo.object_key],
+  );
+}
+
+/**
+ * Depoda artık hiçbir kaydın kullanmadığı dosyalar: yeniden taşınan kayıtların ESKİ
+ * sürümlerine ait olanlar ve (`goneIds`) kaynakta silinmiş kayıtlarınkiler. Bir kaydın
+ * geçerli (son) sürümünün kullandığı dosya asla listeye girmez.
+ */
+export function staleObjectKeys(history: RegistryEntry[], goneIds: number[] = []): string[] {
+  const latest = new Map<number, RegistryEntry>();
+  for (const entry of history) latest.set(entry.kayit_id, entry);
+  const gone = new Set(goneIds);
+
+  const inUse = new Set<string>();
+  for (const entry of latest.values()) {
+    if (!gone.has(entry.kayit_id)) keysOf(entry).forEach((key) => inUse.add(key));
+  }
+  const stale = new Set<string>();
+  for (const entry of history) {
+    for (const key of keysOf(entry)) {
+      if (!inUse.has(key)) stale.add(key);
+    }
+  }
+  return [...stale].sort();
 }
 
 export function appendRegistry(file: string, entry: RegistryEntry): void {

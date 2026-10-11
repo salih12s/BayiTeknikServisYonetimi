@@ -11,6 +11,9 @@
  *           değişmiş). --check-storage ile depodaki her dosyanın boyutunu da doğrular.
  *   import  Defterdeki fotoğrafları hedef MySQL veritabanının `saha_fotograflari`
  *           tablosuna yazar (yeniden çalıştırılabilir).
+ *   prune   Depoda artık hiçbir kaydın kullanmadığı dosyaları listeler: yeniden taşınan
+ *           kayıtların eski sürümleri ve (--source-env verilirse) kaynakta silinmiş
+ *           kayıtların dosyaları. Yalnızca --apply ile siler.
  *
  * Kullanım (backend klasöründen):
  *   npx ts-node src/scripts/migrateSahaPhotosToR2.ts upload \
@@ -21,6 +24,8 @@
  *     [--check-storage --r2-env .env.r2.local]
  *   npx ts-node src/scripts/migrateSahaPhotosToR2.ts import \
  *     --target-env .env.hostinger.local --registry <defter.jsonl> [--target-db <ad>] [--remote]
+ *   npx ts-node src/scripts/migrateSahaPhotosToR2.ts prune \
+ *     --registry <defter.jsonl> --r2-env .env.r2.local [--source-env .env.production] [--apply]
  *
  * Kayıt defteri müşteri adlarından türeyen dosya adları içerir: depo (git) klasörünün
  * DIŞINDA tutun.
@@ -45,10 +50,14 @@ import {
   appendRegistry,
   planMigration,
   readRegistry,
+  readRegistryHistory,
+  staleObjectKeys,
 } from './photo-migration/registry';
 
 interface Options {
-  command: 'upload' | 'verify' | 'import';
+  command: 'upload' | 'verify' | 'import' | 'prune';
+  /** prune: listelemekle yetinme, sil. */
+  apply: boolean;
   registry: string;
   sourceEnv?: string;
   sourceDb?: string;
@@ -69,8 +78,8 @@ function parseArgs(argv: string[]): Options {
     return index >= 0 ? argv[index + 1] : undefined;
   };
   const command = argv[0];
-  if (command !== 'upload' && command !== 'verify' && command !== 'import') {
-    throw new Error('İlk argüman upload, verify ya da import olmalı');
+  if (command !== 'upload' && command !== 'verify' && command !== 'import' && command !== 'prune') {
+    throw new Error('İlk argüman upload, verify, import ya da prune olmalı');
   }
   const registry = value('--registry');
   if (!registry) throw new Error('--registry zorunlu');
@@ -94,6 +103,7 @@ function parseArgs(argv: string[]): Options {
     remote: argv.includes('--remote'),
     checkStorage: argv.includes('--check-storage'),
     newest: argv.includes('--newest'),
+    apply: argv.includes('--apply'),
     limit: count('--limit', Number.MAX_SAFE_INTEGER),
     concurrency: Math.min(count('--concurrency', 3), 8),
   };
@@ -444,8 +454,36 @@ async function importRegistry(options: Options): Promise<boolean> {
   }
 }
 
+async function prune(options: Options): Promise<boolean> {
+  const history = readRegistryHistory(options.registry);
+  let gone: number[] = [];
+  if (options.sourceEnv) {
+    const source = await connectSource(readEnv(options.sourceEnv), options.sourceDb);
+    try {
+      gone = planMigration(await listSource(source), readRegistry(options.registry)).gone;
+    } finally {
+      await source.end().catch(() => undefined);
+    }
+  }
+
+  const stale = staleObjectKeys(history, gone);
+  console.log(`Kaynakta silinmiş kayıt: ${options.sourceEnv ? gone.length : 'bakılmadı (--source-env verilmedi)'}`);
+  console.log(`Depoda artık kullanılmayan dosya: ${stale.length}`);
+  for (const key of stale.slice(0, 10)) console.log(`  ${key}`);
+  if (stale.length === 0) return true;
+
+  if (!options.apply) {
+    console.log('\nHiçbir şey silinmedi. Silmek için aynı komutu --apply ile çalıştırın.');
+    return true;
+  }
+  await useR2(options.r2Env).deleteMany(stale);
+  console.log(`\n${stale.length} dosya depodan silindi.`);
+  return true;
+}
+
 async function main(): Promise<boolean> {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === 'prune') return prune(options);
   if (options.command === 'upload') return upload(options);
   if (options.command === 'verify') return verify(options);
   return importRegistry(options);

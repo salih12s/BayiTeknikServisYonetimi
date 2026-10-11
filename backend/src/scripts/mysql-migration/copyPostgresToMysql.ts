@@ -160,6 +160,14 @@ async function sourceColumns(source: Client, table: string): Promise<ColumnInfo[
   return result.rows.map((row) => ({ name: row.column_name, dataType: row.data_type }));
 }
 
+async function tableExists(target: Connection, table: string): Promise<boolean> {
+  const [rows] = await target.query<RowDataPacket[]>(
+    'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?',
+    [table],
+  );
+  return rows.length > 0;
+}
+
 async function targetColumns(target: Connection, table: string): Promise<string[]> {
   const [rows] = await target.query<RowDataPacket[]>(
     `SELECT column_name AS name FROM information_schema.columns
@@ -320,6 +328,7 @@ async function run(): Promise<boolean> {
       plan.push({ table, columns, rows: await readSource(source, table, columns, options) });
     }
 
+    let photosCleared = false;
     if (!options.verifyOnly) {
       for (const { table } of plan) {
         const [rows] = await target.query<RowDataPacket[]>(
@@ -333,6 +342,21 @@ async function run(): Promise<boolean> {
       await target.query('SET FOREIGN_KEY_CHECKS = 0');
       await target.beginTransaction();
       try {
+        // Kayıtlar baştan yazılıyor: hedefte yüklenmiş fotoğraflar (ör. prova sırasında
+        // eklenenler) artık hiçbir kayda ait değildir. Satırları bırakmak tehlikelidir:
+        // aynı numara kaynaktan gelen BAŞKA bir kayda verilir ve fotoğraf yanlış kayıtta
+        // görünür. Dosyaları silme kuyruğuna alınır, satırları silinir. Eski sistemden
+        // taşınan (legacy) fotoğraflar taşıma betiğinin "import" adımıyla yeniden bağlanır.
+        if (await tableExists(target, 'saha_fotograflari')) {
+          await target.query(
+            `INSERT INTO r2_silme_kuyrugu (object_key)
+             SELECT object_key FROM saha_fotograflari WHERE source <> 'legacy'
+             UNION ALL
+             SELECT thumb_key FROM saha_fotograflari WHERE source <> 'legacy' AND thumb_key IS NOT NULL`,
+          );
+          await target.query('DELETE FROM saha_fotograflari');
+          photosCleared = true;
+        }
         for (const { table } of [...plan].reverse()) {
           await target.query(`DELETE FROM ${quoteMy(table)}`);
         }
@@ -372,6 +396,12 @@ async function run(): Promise<boolean> {
       `\n${options.verifyOnly ? 'Doğrulama' : 'Kopya + doğrulama'}: ${allEqual ? 'BİREBİR AYNI' : 'FARK VAR'}` +
         (options.photos === 'skip' ? ' (foto_data kapsam dışı)' : ''),
     );
+    if (photosCleared) {
+      console.log(
+        'Fotoğraf bağlantıları sıfırlandı: taşınan fotoğrafları yeniden bağlamak için ' +
+          'migrateSahaPhotosToR2.ts "import" adımını çalıştırın.',
+      );
+    }
     return allEqual;
   } finally {
     await source.query('ROLLBACK').catch(() => undefined);
