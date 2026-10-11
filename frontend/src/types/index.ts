@@ -168,6 +168,8 @@ export interface Atolye {
 }
 
 export interface AtolyeCreateDto {
+  /** Aynı bilgilerle kaç ayrı kayıt açılacağı (varsayılan 1). */
+  adet?: number;
   bayi_adi: string;
   musteri_ad_soyad: string;
   tel_no: string;

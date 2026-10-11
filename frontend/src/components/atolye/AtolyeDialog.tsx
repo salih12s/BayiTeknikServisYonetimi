@@ -37,6 +37,7 @@ const STATUS_OPTIONS = [
 const AtolyeDialog: React.FC<AtolyeDialogProps> = ({ open, onClose, atolyeId }) => {
   const isEdit = atolyeId !== null;
   const { showSnackbar } = useSnackbar();
+  const [adet, setAdet] = useState('1');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -147,6 +148,7 @@ const AtolyeDialog: React.FC<AtolyeDialogProps> = ({ open, onClose, atolyeId }) 
   };
 
   const resetForm = () => {
+    setAdet('1');
     setBayiInputValue('');
     setMarkaInputValue('');
     setFormData({
@@ -186,7 +188,15 @@ const AtolyeDialog: React.FC<AtolyeDialogProps> = ({ open, onClose, atolyeId }) 
     return cleaned;
   };
 
+  // Adet alanı yalnızca yeni kayıtta kullanılır.
+  const adetGecersiz = !isEdit && !/^([1-9]|[1-9][0-9]|100)$/.test(adet.trim());
+  const adetSayisi = isEdit || adetGecersiz ? 1 : Number(adet.trim());
+
   const handleSubmit = async () => {
+    if (adetGecersiz) {
+      showSnackbar('Adet 1 ile 100 arasında bir sayı olmalıdır!', 'error');
+      return;
+    }
     // Bayi Adı VEYA Müşteri Adı kontrolü - en az biri dolu olmalı
     const hasBayi = formData.bayi_adi && formData.bayi_adi.trim() !== '';
     const hasMusteri = formData.musteri_ad_soyad && formData.musteri_ad_soyad.trim() !== '';
@@ -264,14 +274,25 @@ const AtolyeDialog: React.FC<AtolyeDialogProps> = ({ open, onClose, atolyeId }) 
           tel_no: formData.tel_no,
           marka: formData.marka,
           kod: formData.kod,
-          seri_no: formData.seri_no,
+          // Çoklu girişte her ürünün seri numarası farklıdır; sonradan tek tek girilir.
+          seri_no: adetSayisi > 1 ? '' : formData.seri_no,
           sikayet: formData.sikayet,
           ozel_not: formData.ozel_not,
           kayit_tarihi: kayitTarihiWithTime,
+          adet: adetSayisi,
         };
 
+        if (
+          adetSayisi > 1 &&
+          !window.confirm(`Aynı bilgilerle ${adetSayisi} ayrı kayıt oluşturulacak. Devam edilsin mi?`)
+        ) {
+          return;
+        }
         await atolyeService.create(createDto);
-        showSnackbar('Kayıt başarıyla oluşturuldu', 'success');
+        showSnackbar(
+          adetSayisi > 1 ? `${adetSayisi} kayıt başarıyla oluşturuldu` : 'Kayıt başarıyla oluşturuldu',
+          'success'
+        );
       }
       onClose(true);
     } catch (error: any) {
@@ -374,10 +395,34 @@ const AtolyeDialog: React.FC<AtolyeDialogProps> = ({ open, onClose, atolyeId }) 
             <TextField
               label="Seri No"
               fullWidth
-              value={formData.seri_no}
+              value={adetSayisi > 1 ? '' : formData.seri_no}
               onChange={(e) => handleChange('seri_no', e.target.value)}
+              disabled={adetSayisi > 1}
+              helperText={adetSayisi > 1 ? 'Çoklu girişte boş kalır, sonradan her kayıtta ayrı girilir' : undefined}
             />
           </Grid>
+
+          {/* Adet: aynı üründen birden çok geldiyse tek seferde hepsi için kayıt açılır */}
+          {!isEdit && (
+            <Grid item xs={12} md={6}>
+              <TextField
+                label="Adet"
+                type="number"
+                fullWidth
+                value={adet}
+                onChange={(e) => setAdet(e.target.value)}
+                inputProps={{ min: 1, max: 100, inputMode: 'numeric' }}
+                error={adetGecersiz}
+                helperText={
+                  adetGecersiz
+                    ? '1 ile 100 arasında bir sayı girin'
+                    : adetSayisi > 1
+                      ? `Aynı bilgilerle ${adetSayisi} ayrı kayıt açılır, her birinin sıra numarası farklı olur`
+                      : 'Aynı üründen birden çok geldiyse adedini yazın'
+                }
+              />
+            </Grid>
+          )}
 
           {/* Şikayet */}
           <Grid item xs={12}>

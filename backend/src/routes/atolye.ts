@@ -6,6 +6,7 @@ import { Atolye, AtolyeCreateDto, AtolyeUpdateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
+import { MAX_ATOLYE_ADET, parseAdet } from '../utils/atolyeRules';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
@@ -136,6 +137,13 @@ router.post('/', auth, async (req: Request, res: Response) => {
     const createDto: AtolyeCreateDto = req.body;
     const username = req.user?.username;
 
+    // Aynı üründen birden çok geldiyse "adet" kadar ayrı kayıt açılır (her birinin sıra
+    // numarası farklıdır).
+    const adet = parseAdet(req.body.adet);
+    if (adet === null) {
+      return res.status(400).json({ error: `Adet 1 ile ${MAX_ATOLYE_ADET} arasında bir tam sayı olmalıdır` });
+    }
+
     // Tarihi sadece YYYY-MM-DD formatında al (saat kısmını at)
     let kayitTarihi = null;
     if (createDto.kayit_tarihi) {
@@ -149,7 +157,7 @@ router.post('/', auth, async (req: Request, res: Response) => {
     const result = await query<Atolye>(
       `INSERT INTO atolye (
         bayi_adi, musteri_ad_soyad, tel_no, marka, kod, seri_no, sikayet, ozel_not, note_no, kayit_tarihi, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+      ) VALUES ${Array(adet).fill('($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)').join(', ')}
       RETURNING *`,
       [
         createDto.bayi_adi || null,
@@ -169,7 +177,9 @@ router.post('/', auth, async (req: Request, res: Response) => {
     console.log('Database\'den dönen kayit_tarihi:', result.rows[0].kayit_tarihi);
     console.log('===================');
 
-    const newRecord = result.rows[0];
+    // Tek INSERT cümlesi: kayıtların ya hepsi açılır ya hiçbiri; numaraları ardışıktır.
+    const records = [...result.rows].sort((a, b) => a.id - b.id);
+    const newRecord = records[0];
 
     // Cache'i invalidate et
     invalidateCache();
@@ -177,10 +187,11 @@ router.post('/', auth, async (req: Request, res: Response) => {
     // Socket.IO ile tüm bağlı kullanıcılara bildir
     const io = req.app.get('io');
     if (io) {
-      io.emit(SOCKET_EVENTS.YENI_ATOLYE, newRecord);
+      for (const record of records) io.emit(SOCKET_EVENTS.YENI_ATOLYE, record);
     }
 
-    return res.status(201).json(newRecord);
+    // Tek kayıtta yanıt eskisiyle aynıdır; çoklu girişte açılan kayıt sayısı eklenir.
+    return res.status(201).json(adet === 1 ? newRecord : { ...newRecord, eklenen_adet: records.length });
   } catch (error) {
     logger.error('Error creating atolye record:', error);
     return res.status(500).json({ error: 'Kayıt oluşturulurken hata oluştu' });
