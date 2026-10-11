@@ -248,13 +248,14 @@ describe('saha fotoğraf uçları (API + MariaDB)', options, () => {
     assert.deepEqual(
       photos.body.fotolar.map((foto: any) => [foto.id, foto.name, foto.download_name, foto.size_bytes]),
       [
-        [uploads[1].id, 'foto 2.jpg', 'foto_2.jpg', 1001],
-        [uploads[0].id, 'foto 1.jpg', 'foto_1.jpg', 1000],
+        // İndirme adı telefonun verdiği dosya adı değil, kayıttaki ad soyaddır.
+        [uploads[1].id, 'foto 2.jpg', 'Ahmet_Yılmaz_1.jpg', 1001],
+        [uploads[0].id, 'foto 1.jpg', 'Ahmet_Yılmaz_2.jpg', 1000],
       ],
     );
     assert.equal(photos.body.fotolar[0].url, `https://fake.r2/get/${rows[0].object_key}`);
     assert.equal(photos.body.fotolar[0].thumb_url, `https://fake.r2/get/${rows[0].thumb_key}`);
-    assert.match(photos.body.fotolar[0].download_url, /\?download=foto_2\.jpg$/);
+    assert.match(photos.body.fotolar[0].download_url, /\?download=Ahmet_Y%C4%B1lmaz_1\.jpg$/);
 
     const thumbnail = await api('GET', `/kayit-thumbnail/${kayitId}`, user.token);
     assert.deepEqual(thumbnail.body, { foto_preview: `https://fake.r2/get/${rows[0].thumb_key}` });
@@ -286,8 +287,7 @@ describe('saha fotoğraf uçları (API + MariaDB)', options, () => {
 
     const photos = await api('GET', `/kayit-photos/${created.body.kayit.id}`, user.token);
     assert.equal(photos.body.fotolar[0].thumb_url, photos.body.fotolar[0].url);
-    // Orijinal ad yok: indirme adı kayıttan üretilir.
-    assert.match(photos.body.fotolar[0].download_name, /^Ahmet_Yılmaz_\d{4}-\d{2}-\d{2}\.png$/);
+    assert.match(photos.body.fotolar[0].download_name, /^Ahmet_Yılmaz\.png$/);
   });
 
   // ---- yetki (401 / 403 / başkasının kaydı)

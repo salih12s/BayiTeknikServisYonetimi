@@ -114,9 +114,9 @@ function sanitizeFileName(value: string): string {
 /**
  * İndirme için dosya adı üretir.
  *
- * R2'deki fotoğraflarda adı sunucu verir. Diğerlerinde öncelik sırası:
- *   1. Fotoğrafın saklanan orijinal adı
- *   2. `fallbackBase` (ör. "Ahmet_Yilmaz_2026-07-28")
+ * Dosya adı kayıttaki ad soyaddır (ör. "Ahmet_Yılmaz.jpg", birden çok fotoğrafta
+ * "Ahmet_Yılmaz_2.jpg"); telefonun verdiği ad (IMG_2034 gibi) kullanılmaz. R2'deki
+ * fotoğraflarda adı sunucu verir, diğerlerinde `fallbackBase` kullanılır.
  *
  * Uzantı her durumda verinin GERÇEK MIME tipinden alınır: yükleme sırasında
  * görüntü yeniden kodlanıyor, dolayısıyla ".png" olarak seçilen bir dosya
@@ -131,12 +131,6 @@ export function buildPhotoFileName(
   if (photo.downloadName) return photo.downloadName;
 
   const ext = extensionOf(photo);
-
-  if (photo.name) {
-    const base = sanitizeFileName(photo.name.replace(/\.[^.]+$/, ''));
-    if (base) return `${base}.${ext}`;
-  }
-
   const base = sanitizeFileName(fallbackBase) || 'fotograf';
   const suffix = total > 1 ? `_${index + 1}` : '';
   return `${base}${suffix}.${ext}`;

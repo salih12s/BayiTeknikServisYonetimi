@@ -4,7 +4,7 @@ import {
   MAX_PHOTO_BYTES,
   MAX_THUMB_BYTES,
   buildDownloadName,
-  buildFallbackBase,
+  buildRecordBaseName,
   buildObjectKeys,
   firstLegacyPhoto,
   parsePhotoIds,
@@ -145,39 +145,26 @@ describe('buildObjectKeys', () => {
 });
 
 describe('buildDownloadName', () => {
-  const base = { fallbackBase: 'Ahmet_Yılmaz_2026-07-28', index: 0, total: 1 };
+  const base = { baseName: 'Ahmet Yılmaz', index: 0, total: 1 };
 
-  it('orijinal ad korunur, uzantı gerçek tipten gelir', () => {
-    assert.equal(
-      buildDownloadName({ ...base, originalName: 'IMG 2034.PNG', mimeType: 'image/jpeg' }),
-      'IMG_2034.jpg',
-    );
-    assert.equal(
-      buildDownloadName({ ...base, originalName: 'ön.cephe.webp', mimeType: 'image/webp' }),
-      'ön.cephe.webp',
-    );
+  it('dosya adı kayıttaki ad soyaddır; uzantı gerçek tipten gelir', () => {
+    assert.equal(buildDownloadName({ ...base, mimeType: 'image/jpeg' }), 'Ahmet_Yılmaz.jpg');
+    assert.equal(buildDownloadName({ ...base, mimeType: 'image/png' }), 'Ahmet_Yılmaz.png');
+    assert.equal(buildDownloadName({ ...base, mimeType: 'image/heic' }), 'Ahmet_Yılmaz.heic');
   });
 
-  it('orijinal ad yoksa kayıt bilgisinden üretir; birden çok fotoğrafta sıra eklenir', () => {
-    assert.equal(
-      buildDownloadName({ ...base, originalName: null, mimeType: 'image/jpeg' }),
-      'Ahmet_Yılmaz_2026-07-28.jpg',
-    );
-    assert.equal(
-      buildDownloadName({ ...base, originalName: null, mimeType: 'image/png', index: 2, total: 3 }),
-      'Ahmet_Yılmaz_2026-07-28_3.png',
-    );
+  it('kayıtta birden çok fotoğraf varsa sıra numarası eklenir', () => {
+    assert.equal(buildDownloadName({ ...base, mimeType: 'image/jpeg', index: 0, total: 3 }), 'Ahmet_Yılmaz_1.jpg');
+    assert.equal(buildDownloadName({ ...base, mimeType: 'image/jpeg', index: 2, total: 3 }), 'Ahmet_Yılmaz_3.jpg');
   });
 
-  it('yalnızca yasak karakterlerden oluşan ad yedeğe düşer', () => {
-    assert.equal(
-      buildDownloadName({ ...base, originalName: '???.jpg', mimeType: 'image/jpeg' }),
-      'Ahmet_Yılmaz_2026-07-28.jpg',
-    );
-    assert.equal(
-      buildDownloadName({ originalName: null, mimeType: 'image/jpeg', fallbackBase: '', index: 0, total: 1 }),
-      'fotograf.jpg',
-    );
+  it('ad boşsa ya da yalnızca yasak karakterlerden oluşuyorsa "fotograf" kullanılır', () => {
+    assert.equal(buildDownloadName({ ...base, baseName: '', mimeType: 'image/jpeg' }), 'fotograf.jpg');
+    assert.equal(buildDownloadName({ ...base, baseName: '???', mimeType: 'image/jpeg' }), 'fotograf.jpg');
+  });
+
+  it('dosya sisteminde sorun çıkaran karakterler temizlenir', () => {
+    assert.equal(buildDownloadName({ ...base, baseName: 'Ali/Veli: "Usta"', mimeType: 'image/jpeg' }), 'Ali_Veli_Usta.jpg');
   });
 });
 
@@ -190,22 +177,22 @@ describe('sanitizeFileName', () => {
   });
 });
 
-describe('buildFallbackBase', () => {
-  it('isim, soyisim ve kayıt tarihinden ad üretir (Date ve metin)', () => {
+describe('buildRecordBaseName', () => {
+  const kayit = { isim: 'Ahmet', soyisim: 'Yılmaz', created_at: new Date('2026-07-28T21:30:00Z') };
+
+  it('ad soyaddan üretilir; tarih yalnızca istenirse eklenir', () => {
+    assert.equal(buildRecordBaseName(kayit), 'Ahmet_Yılmaz');
+    assert.equal(buildRecordBaseName(kayit, { withDate: true }), 'Ahmet_Yılmaz_2026-07-28');
     assert.equal(
-      buildFallbackBase({ isim: 'Ahmet', soyisim: 'Yılmaz', created_at: new Date('2026-07-28T21:30:00Z') }),
-      'Ahmet_Yılmaz_2026-07-28',
-    );
-    assert.equal(
-      buildFallbackBase({ isim: 'Ahmet', soyisim: 'Yılmaz', created_at: '2026-07-28T21:30:00.000Z' }),
+      buildRecordBaseName({ ...kayit, created_at: '2026-07-28T21:30:00.000Z' }, { withDate: true }),
       'Ahmet_Yılmaz_2026-07-28',
     );
   });
 
   it('eksik bilgiyle de çalışır', () => {
-    assert.equal(buildFallbackBase({ isim: 'Ahmet' }), 'Ahmet');
-    assert.equal(buildFallbackBase({}), 'fotograf');
-    assert.equal(buildFallbackBase({ isim: null, soyisim: null, created_at: null }), 'fotograf');
+    assert.equal(buildRecordBaseName({ isim: 'Ahmet' }), 'Ahmet');
+    assert.equal(buildRecordBaseName({}), 'fotograf');
+    assert.equal(buildRecordBaseName({ isim: null, soyisim: null, created_at: null }, { withDate: true }), 'fotograf');
   });
 });
 

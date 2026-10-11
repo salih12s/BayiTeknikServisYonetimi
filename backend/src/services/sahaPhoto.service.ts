@@ -5,7 +5,7 @@ import {
   THUMB_MIME_TYPE,
   UploadRequestPhoto,
   buildDownloadName,
-  buildFallbackBase,
+  buildRecordBaseName,
   buildObjectKeys,
 } from '../utils/sahaPhotoRules';
 import { PhotoStorage, getPhotoStorage } from './r2.service';
@@ -286,13 +286,12 @@ export async function listRecordPhotos(kayit: {
   if (rows.length === 0) return [];
 
   const storage = requireStorage();
-  const fallbackBase = buildFallbackBase(kayit);
+  const baseName = buildRecordBaseName(kayit);
   return Promise.all(
     rows.map(async (row, index) => {
       const downloadName = buildDownloadName({
-        originalName: row.original_name,
         mimeType: row.mime_type,
-        fallbackBase,
+        baseName,
         index,
         total: rows.length,
       });

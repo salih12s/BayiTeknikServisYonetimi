@@ -133,39 +133,34 @@ export function sanitizeFileName(value: string): string {
 }
 
 /**
- * İndirme için dosya adı. Öncelik: fotoğrafın saklanan orijinal adı, yoksa kaydın
- * bilgilerinden üretilen ad (ör. "Ahmet_Yilmaz_2026-07-28_2"). Uzantı her durumda
- * dosyanın GERÇEK tipinden gelir: ".png" olarak seçilen dosya JPEG'e çevrilmiş olabilir.
+ * İndirme için dosya adı: kayıttaki ad soyad (ör. "Ahmet_Yılmaz.jpg"; kayıtta birden çok
+ * fotoğraf varsa "Ahmet_Yılmaz_2.jpg"). Telefonun verdiği dosya adı (IMG_2034 gibi)
+ * kullanılmaz: indirilen dosyanın kime ait olduğu adından anlaşılmalıdır. Uzantı dosyanın
+ * GERÇEK tipinden gelir: ".png" olarak seçilen dosya JPEG'e çevrilmiş olabilir.
  */
 export function buildDownloadName(photo: {
-  originalName: string | null;
   mimeType: string;
-  fallbackBase: string;
+  baseName: string;
   index: number;
   total: number;
 }): string {
-  const extension = extensionForMimeType(photo.mimeType);
-
-  if (photo.originalName) {
-    const base = sanitizeFileName(photo.originalName.replace(/\.[^.]+$/, ''));
-    if (base) return `${base}.${extension}`;
-  }
-
-  const base = sanitizeFileName(photo.fallbackBase) || 'fotograf';
+  const base = sanitizeFileName(photo.baseName) || 'fotograf';
   const suffix = photo.total > 1 ? `_${photo.index + 1}` : '';
-  return `${base}${suffix}.${extension}`;
+  return `${base}${suffix}.${extensionForMimeType(photo.mimeType)}`;
 }
 
-/** Orijinal adı olmayan fotoğraflar için ad tabanı: "Ahmet_Yilmaz_2026-07-28". */
-export function buildFallbackBase(kayit: {
-  isim?: string | null;
-  soyisim?: string | null;
-  created_at?: Date | string | null;
-}): string {
+/**
+ * Kaydın ad soyadından dosya adı tabanı: "Ahmet_Yılmaz". `withDate` ile kayıt tarihi de
+ * eklenir ("Ahmet_Yılmaz_2026-07-28"): toplu indirmede aynı adlı kayıtlar karışmasın diye.
+ */
+export function buildRecordBaseName(
+  kayit: { isim?: string | null; soyisim?: string | null; created_at?: Date | string | null },
+  options: { withDate?: boolean } = {},
+): string {
   const adSoyad = [kayit.isim, kayit.soyisim].filter(Boolean).join('_');
   const created =
     kayit.created_at instanceof Date ? kayit.created_at.toISOString() : String(kayit.created_at ?? '');
-  const tarih = /^\d{4}-\d{2}-\d{2}/.exec(created)?.[0] ?? '';
+  const tarih = options.withDate ? (/^\d{4}-\d{2}-\d{2}/.exec(created)?.[0] ?? '') : '';
   return [adSoyad, tarih].filter(Boolean).join('_') || 'fotograf';
 }
 
