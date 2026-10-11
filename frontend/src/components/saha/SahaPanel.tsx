@@ -37,7 +37,8 @@ import { useAuth } from '../../context/AuthContext';
 import SahaKayitDialog from './SahaKayitDialog';
 import PhotoLoadingOverlay from './PhotoLoadingOverlay';
 import ImageGalleryDialog from './ImageGalleryDialog';
-import { SahaPhoto, parseSahaPhotos } from '../../utils/sahaPhoto';
+import { SahaPhoto } from '../../utils/sahaPhoto';
+import { useSahaPhotoCache } from '../../hooks/useSahaPhotoCache';
 import { buildKayitFallbackName } from './sahaPhotoName';
 
 const PAGE_SIZE = 50;
@@ -64,7 +65,9 @@ const SahaPanel: React.FC = () => {
   const [selectedPhotos, setSelectedPhotos] = useState<SahaPhoto[]>([]);
   const [selectedFallbackName, setSelectedFallbackName] = useState('fotograf');
   const [photoLoading, setPhotoLoading] = useState(false);
-  const [photoCache, setPhotoCache] = useState<Record<number, SahaPhoto[]>>({});
+  const photoCache = useSahaPhotoCache();
+  // Önizleme adresi açılamayan (ör. süresi dolmuş) kayıtlar: simgeye düşülür.
+  const [brokenPreviews, setBrokenPreviews] = useState<Set<number>>(new Set());
 
   const { showSnackbar } = useSnackbar();
   const { user } = useAuth();
@@ -83,6 +86,7 @@ const SahaPanel: React.FC = () => {
       if (td) params.today = true;
       const resp = await sahaService.getKayitlar(params);
       setKayitlar(resp.data);
+      setBrokenPreviews(new Set());
       setCurrentPage(resp.pagination.page);
       setTotalPages(resp.pagination.totalPages);
       setTotalRecords(resp.pagination.total);
@@ -120,21 +124,19 @@ const SahaPanel: React.FC = () => {
 
   const handleOpenDialog = async (kayit?: SahaKayit) => {
     if (kayit) {
-      setEditingKayit(kayit);
-      if (photoCache[kayit.id]) {
-        setDialogInitialPhotos(photoCache[kayit.id]);
-      } else if (kayit.has_photos) {
+      let fotolar: SahaPhoto[] = [];
+      if (kayit.has_photos) {
         try {
-          const fotoData = await sahaService.getKayitPhotos(kayit.id);
-          const fotolar = parseSahaPhotos(fotoData);
-          setPhotoCache(prev => ({ ...prev, [kayit.id]: fotolar }));
-          setDialogInitialPhotos(fotolar);
+          fotolar = await photoCache.load(kayit.id);
         } catch {
-          setDialogInitialPhotos([]);
+          // Fotoğraflar okunamadan form açılırsa mevcut fotoğraflar boş görünür ve
+          // kaydederken silinebilir; bu yüzden form hiç açılmaz.
+          showSnackbar('Fotoğraflar yüklenemedi, kayıt düzenlenemiyor. Lütfen tekrar deneyin.', 'error');
+          return;
         }
-      } else {
-        setDialogInitialPhotos([]);
       }
+      setEditingKayit(kayit);
+      setDialogInitialPhotos(fotolar);
     } else {
       setEditingKayit(null);
       setDialogInitialPhotos([]);
@@ -155,9 +157,7 @@ const SahaPanel: React.FC = () => {
     loadKayitlar(currentPage);
   }, [loadKayitlar, currentPage]);
 
-  const handlePhotosCached = useCallback((id: number, photos: SahaPhoto[]) => {
-    setPhotoCache(prev => ({ ...prev, [id]: photos }));
-  }, []);
+  const handlePhotosChanged = photoCache.invalidate;
 
   const handleDelete = async (kayit: SahaKayit) => {
     if (!window.confirm(`${kayit.isim} ${kayit.soyisim} kaydını silmek istediğinize emin misiniz?`)) {
@@ -166,6 +166,7 @@ const SahaPanel: React.FC = () => {
 
     try {
       await sahaService.deleteKayit(kayit.id);
+      photoCache.invalidate(kayit.id);
       showSnackbar('Kayıt başarıyla silindi!', 'success');
       loadKayitlar(currentPage);
     } catch (error: any) {
@@ -347,22 +348,15 @@ const SahaPanel: React.FC = () => {
         <Grid container spacing={2}>
           {kayitlar.map((kayit) => {
             const hasPhotos = kayit.has_photos;
-            const fotoPreview = kayit.foto_preview;
+            const fotoPreview = brokenPreviews.has(kayit.id) ? undefined : kayit.foto_preview;
             
             const handleViewPhotos = async (e: React.MouseEvent) => {
               e.stopPropagation();
               if (!hasPhotos && !fotoPreview) return;
               setSelectedFallbackName(buildKayitFallbackName(kayit));
-              if (photoCache[kayit.id]) {
-                setSelectedPhotos(photoCache[kayit.id]);
-                return;
-              }
               try {
                 setPhotoLoading(true);
-                const fotoData = await sahaService.getKayitPhotos(kayit.id);
-                const fotolar = parseSahaPhotos(fotoData);
-                setPhotoCache(prev => ({ ...prev, [kayit.id]: fotolar }));
-                setSelectedPhotos(fotolar);
+                setSelectedPhotos(await photoCache.load(kayit.id));
               } catch {
                 showSnackbar('Fotoğraflar yüklenirken hata oluştu!', 'error');
               } finally {
@@ -391,6 +385,8 @@ const SahaPanel: React.FC = () => {
                       component="img"
                       height="200"
                       image={fotoPreview}
+                      loading="lazy"
+                      onError={() => setBrokenPreviews(prev => new Set(prev).add(kayit.id))}
                       alt={`${kayit.isim} ${kayit.soyisim}`}
                       sx={{ objectFit: 'cover' }}
                     />
@@ -502,7 +498,7 @@ const SahaPanel: React.FC = () => {
         initialPhotos={dialogInitialPhotos}
         onClose={handleCloseDialog}
         onSaved={handleDialogSaved}
-        onPhotosCached={handlePhotosCached}
+        onPhotosChanged={handlePhotosChanged}
       />
 
       <PhotoLoadingOverlay open={photoLoading} />

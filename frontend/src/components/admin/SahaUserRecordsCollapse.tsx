@@ -44,9 +44,10 @@ const SahaUserRecordsCollapse: React.FC<Props> = ({ open, displayName, records }
               {records.map((record) => (
                 <TableRow key={record.id} hover sx={{ '&:hover': { bgcolor: '#bbdefb' } }}>
                   <TableCell>
-                    {record.foto_data ? (
+                    {record.foto_preview ? (
                       <img
-                        src={record.foto_data}
+                        src={record.foto_preview}
+                        loading="lazy"
                         alt={`${record.isim} ${record.soyisim}`}
                         style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 4 }}
                       />

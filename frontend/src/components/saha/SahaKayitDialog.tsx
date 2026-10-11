@@ -15,7 +15,15 @@ import { Close, PhotoCamera } from '@mui/icons-material';
 import { sahaService } from '../../services/saha.service';
 import { SahaKayit, SahaKayitCreateDto } from '../../types';
 import { useSnackbar } from '../../context/SnackbarContext';
-import { SahaPhoto, serializeSahaPhotos } from '../../utils/sahaPhoto';
+import { SahaPhoto } from '../../utils/sahaPhoto';
+import {
+  MAX_PHOTOS,
+  MAX_SOURCE_BYTES,
+  pendingPhoto,
+  preparePhoto,
+  releasePendingPhoto,
+  resolvePhotoIds,
+} from '../../utils/sahaPhotoUpload';
 
 interface Props {
   open: boolean;
@@ -23,131 +31,103 @@ interface Props {
   initialPhotos: SahaPhoto[];
   onClose: () => void;
   onSaved: () => void;
-  onPhotosCached: (id: number, photos: SahaPhoto[]) => void;
+  /** Kaydın fotoğrafları değişti; çağıran sakladığı listeyi atmalıdır. */
+  onPhotosChanged: (id: number) => void;
 }
 
-// Fotoğrafı sıkıştır (yüksek kalite koruyarak boyutu azalt)
-const compressImage = (file: File, maxWidth = 2400, quality = 0.92): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const fallbackReader = new FileReader();
-    let fallbackBase64 = '';
-    fallbackReader.onload = (e) => { fallbackBase64 = e.target?.result as string; };
-    fallbackReader.readAsDataURL(file);
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      const timeout = setTimeout(() => {
-        if (fallbackBase64) resolve(fallbackBase64);
-        else reject(new Error('Sıkıştırma zaman aşımı'));
-      }, 10000);
-
-      img.onload = () => {
-        clearTimeout(timeout);
-        try {
-          const canvas = document.createElement('canvas');
-          let width = img.width;
-          let height = img.height;
-          if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
-          const maxHeight = 3200;
-          if (height > maxHeight) { width = (width * maxHeight) / height; height = maxHeight; }
-          canvas.width = Math.floor(width);
-          canvas.height = Math.floor(height);
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            try { resolve(canvas.toDataURL('image/jpeg', quality)); }
-            catch { if (fallbackBase64) resolve(fallbackBase64); else reject(new Error('Canvas error')); }
-          } else if (fallbackBase64) resolve(fallbackBase64);
-          else reject(new Error('Canvas context not available'));
-        } catch (err) {
-          if (fallbackBase64) resolve(fallbackBase64); else reject(err);
-        }
-      };
-      img.onerror = () => {
-        clearTimeout(timeout);
-        if (fallbackBase64) resolve(fallbackBase64); else reject(new Error('Image load error'));
-      };
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => { if (fallbackBase64) resolve(fallbackBase64); else reject(new Error('Read error')); };
-    reader.readAsDataURL(file);
-  });
-};
-
-const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, onClose, onSaved, onPhotosCached }) => {
+const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, onClose, onSaved, onPhotosChanged }) => {
   const [formIsim, setFormIsim] = useState('');
   const [formSoyisim, setFormSoyisim] = useState('');
   const [formNotlar, setFormNotlar] = useState('');
   const [formFotolar, setFormFotolar] = useState<SahaPhoto[]>([]);
+  // Düzenlemede fotoğraf listesine dokunulmadıysa sunucuya hiç gönderilmez.
+  const [photosDirty, setPhotosDirty] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  // Kaydetme başarısız olup yeniden denenirse yüklenmiş fotoğraf ikinci kez yüklenmez.
+  const uploadedRef = useRef(new Map<SahaPhoto, number>());
+  const fotolarRef = useRef<SahaPhoto[]>([]);
+  fotolarRef.current = formFotolar;
   const { showSnackbar } = useSnackbar();
 
-  // Dialog her açıldığında formu yeniden doldur
-  useEffect(() => {
-    if (!open) return;
-    if (editingKayit) {
-      setFormIsim(editingKayit.isim);
-      setFormSoyisim(editingKayit.soyisim);
-      setFormNotlar(editingKayit.notlar || '');
-      setFormFotolar(initialPhotos || []);
-    } else {
-      setFormIsim('');
-      setFormSoyisim('');
-      setFormNotlar('');
-      setFormFotolar([]);
+  // Dialog her açıldığında form yeniden doldurulur. Bu, effect içinde değil çizim
+  // sırasında yapılır: effect çizimden SONRA çalışır ve form ilk karede bir önceki
+  // açılışın içeriğini (o arada serbest bırakılmış önizleme adresleriyle) gösterirdi.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setFormIsim(editingKayit?.isim ?? '');
+      setFormSoyisim(editingKayit?.soyisim ?? '');
+      setFormNotlar(editingKayit?.notlar || '');
+      setFormFotolar(editingKayit ? initialPhotos || [] : []);
+      setPhotosDirty(false);
     }
-  }, [open, editingKayit, initialPhotos]);
+  }
+
+  useEffect(() => {
+    if (open) uploadedRef.current = new Map();
+  }, [open]);
+
+  // Seçilmiş dosyalar için açılan geçici (blob:) adresler, form tamamen kapandıktan
+  // (kapanış animasyonu bittikten) sonra ve sayfadan çıkılırken serbest bırakılır.
+  const releasePendingPhotos = () => fotolarRef.current.forEach(releasePendingPhoto);
+  useEffect(() => () => fotolarRef.current.forEach(releasePendingPhoto), []);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    const maxPhotos = 5;
-    if (formFotolar.length + files.length > maxPhotos) {
-      showSnackbar(`Maksimum ${maxPhotos} fotoğraf yükleyebilirsiniz!`, 'warning');
-      return;
-    }
-    const newPhotos: SahaPhoto[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.size > 10 * 1024 * 1024) {
-        showSnackbar(`${file.name} dosyası 10MB'dan büyük, atlandı!`, 'warning');
-        continue;
-      }
-      // Orijinal dosya adını sakla — indirirken aynı isimle gelmesi için.
-      // (Kamera ile çekilen fotoğraflarda tarayıcı genelde "image.jpg" gibi
-      // jenerik bir ad verir; o durumda indirme adı kayıttan üretilir.)
-      const originalName = file.name || undefined;
-      try {
-        const compressedData = await compressImage(file, 2400, 0.92);
-        newPhotos.push({ data: compressedData, name: originalName });
-      } catch {
-        try {
-          const reader = new FileReader();
-          const base64 = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-          });
-          newPhotos.push({ data: base64, name: originalName });
-        } catch {
-          showSnackbar(`${file.name} yüklenemedi!`, 'warning');
-        }
-      }
-    }
-    if (newPhotos.length > 0) {
-      setFormFotolar(prev => [...prev, ...newPhotos]);
-      showSnackbar(`${newPhotos.length} fotoğraf yüklendi!`, 'success');
-    }
+    const files = Array.from(event.target.files || []);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (cameraInputRef.current) cameraInputRef.current.value = '';
+    if (files.length === 0) return;
+    if (formFotolar.length + files.length > MAX_PHOTOS) {
+      showSnackbar(`Maksimum ${MAX_PHOTOS} fotoğraf yükleyebilirsiniz!`, 'warning');
+      return;
+    }
+
+    const newPhotos: SahaPhoto[] = [];
+    const skipped: string[] = [];
+    setPreparing(true);
+    try {
+      for (const file of files) {
+        if (file.size > MAX_SOURCE_BYTES) {
+          skipped.push(`${file.name} (10MB'dan büyük)`);
+          continue;
+        }
+        try {
+          // Orijinal dosya adını sakla — indirirken aynı isimle gelmesi için.
+          // (Kamera ile çekilen fotoğraflarda tarayıcı genelde "image.jpg" gibi
+          // jenerik bir ad verir; o durumda indirme adı kayıttan üretilir.)
+          newPhotos.push(pendingPhoto(await preparePhoto(file), file.name || undefined));
+        } catch {
+          skipped.push(`${file.name} (açılamadı)`);
+        }
+      }
+    } finally {
+      setPreparing(false);
+    }
+
+    if (newPhotos.length > 0) {
+      setFormFotolar(prev => [...prev, ...newPhotos]);
+      setPhotosDirty(true);
+    }
+    // Bildirim alanı tek mesaj gösterir: atlanan dosyalar ayrı mesajla bildirilirse
+    // hemen ardından gelen "eklendi" mesajı onu siler ve kullanıcı atlananı görmez.
+    if (skipped.length > 0) {
+      showSnackbar(`${newPhotos.length} fotoğraf eklendi. Eklenemeyen: ${skipped.join(', ')}`, 'warning');
+    } else if (newPhotos.length > 0) {
+      showSnackbar(`${newPhotos.length} fotoğraf eklendi!`, 'success');
+    }
   };
 
   const handleRemovePhoto = (index: number) => {
+    const removed = formFotolar[index];
+    if (removed) releasePendingPhoto(removed);
     setFormFotolar(prev => prev.filter((_, i) => i !== index));
+    setPhotosDirty(true);
   };
 
   const handleSubmit = async () => {
@@ -161,11 +141,28 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
         isim: formIsim.trim(),
         soyisim: formSoyisim.trim(),
         notlar: formNotlar.trim() || undefined,
-        foto_data: formFotolar.length > 0 ? serializeSahaPhotos(formFotolar) : undefined,
       };
+
+      const sendPhotos = editingKayit ? photosDirty : formFotolar.length > 0;
+      if (sendPhotos) {
+        try {
+          data.foto_ids = await resolvePhotoIds(formFotolar, uploadedRef.current, (done, total) =>
+            setUploadProgress({ done, total })
+          );
+        } catch (error: any) {
+          console.error('Fotoğraf yüklenirken hata:', error);
+          showSnackbar(
+            error.response?.data?.message ||
+              'Fotoğraflar yüklenemedi. İnternet bağlantınızı kontrol edip tekrar deneyin.',
+            'error'
+          );
+          return;
+        }
+      }
+
       if (editingKayit) {
         await sahaService.updateKayit(editingKayit.id, data);
-        onPhotosCached(editingKayit.id, formFotolar);
+        if (sendPhotos) onPhotosChanged(editingKayit.id);
         showSnackbar('Kayıt başarıyla güncellendi!', 'success');
       } else {
         await sahaService.createKayit(data);
@@ -174,17 +171,34 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
       onSaved();
     } catch (error: any) {
       console.error('Kayıt kaydedilirken hata:', error);
+      // Sunucu fotoğrafları kabul etmediyse (ör. yüklemenin süresi dolmuş) bir sonraki
+      // denemede yeniden yüklensinler.
+      const status = error.response?.status;
+      if (status === 400 || status === 409) uploadedRef.current = new Map();
       showSnackbar(error.response?.data?.message || 'Kayıt kaydedilirken hata oluştu!', 'error');
     } finally {
       setFormSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
+  const busy = formSubmitting || preparing;
+  const handleClose = () => {
+    if (!formSubmitting) onClose();
+  };
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth keepMounted={false}>
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      maxWidth="sm"
+      fullWidth
+      keepMounted={false}
+      TransitionProps={{ onExited: releasePendingPhotos }}
+    >
       <DialogTitle>
         {editingKayit ? 'Kaydı Düzenle' : 'Yeni Kayıt Ekle'}
-        <IconButton onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}>
+        <IconButton onClick={handleClose} disabled={formSubmitting} sx={{ position: 'absolute', right: 8, top: 8 }}>
           <Close />
         </IconButton>
       </DialogTitle>
@@ -194,13 +208,13 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
             {formFotolar.length > 0 ? (
               <Box sx={{ mb: 2 }}>
                 <Typography variant="body2" color="text.secondary" gutterBottom>
-                  {formFotolar.length}/5 fotoğraf yüklendi
+                  {formFotolar.length}/{MAX_PHOTOS} fotoğraf eklendi
                 </Typography>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'center' }}>
                   {formFotolar.map((foto, index) => (
                     <Box key={index} sx={{ position: 'relative', display: 'inline-block' }}>
                       <img
-                        src={foto.data}
+                        src={foto.thumbUrl}
                         alt={foto.name || `Preview ${index + 1}`}
                         title={foto.name}
                         style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover', border: '1px solid #ddd' }}
@@ -208,6 +222,7 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
                       <IconButton
                         size="small"
                         onClick={() => handleRemovePhoto(index)}
+                        disabled={formSubmitting}
                         sx={{ position: 'absolute', top: -8, right: -8, bgcolor: 'error.main', color: 'white', padding: 0.3, '&:hover': { bgcolor: 'error.dark' } }}
                       >
                         <Close sx={{ fontSize: 14 }} />
@@ -220,7 +235,7 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
               <>
                 <PhotoCamera sx={{ fontSize: 48, color: '#ccc', mb: 1 }} />
                 <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Fotoğraf yüklemek için aşağıdaki butonları kullanın (maks. 5 adet)
+                  Fotoğraf yüklemek için aşağıdaki butonları kullanın (maks. {MAX_PHOTOS} adet)
                 </Typography>
               </>
             )}
@@ -228,18 +243,19 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
             <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: 'none' }} />
             <input type="file" accept="image/*" multiple ref={fileInputRef} onChange={handleFileSelect} style={{ display: 'none' }} />
 
-            {formFotolar.length < 5 && (
+            {formFotolar.length < MAX_PHOTOS && (
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', mt: 1 }}>
                 <Button
                   variant="contained"
                   color="primary"
-                  startIcon={<PhotoCamera />}
+                  startIcon={preparing ? <CircularProgress size={18} color="inherit" /> : <PhotoCamera />}
                   onClick={() => cameraInputRef.current?.click()}
+                  disabled={busy}
                   sx={{ minWidth: 150, py: 1.5, fontSize: '1rem', fontWeight: 600 }}
                 >
                   KAMERA AÇ
                 </Button>
-                <Button variant="outlined" onClick={() => fileInputRef.current?.click()} sx={{ minWidth: 120 }}>
+                <Button variant="outlined" onClick={() => fileInputRef.current?.click()} disabled={busy} sx={{ minWidth: 120 }}>
                   Galeriden Seç
                 </Button>
               </Box>
@@ -275,11 +291,16 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>İptal</Button>
+        {uploadProgress && (
+          <Typography variant="body2" color="text.secondary" sx={{ mr: 'auto', ml: 2 }}>
+            Fotoğraflar yükleniyor {uploadProgress.done}/{uploadProgress.total}
+          </Typography>
+        )}
+        <Button onClick={handleClose} disabled={formSubmitting}>İptal</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={formSubmitting}
+          disabled={busy}
           sx={{ bgcolor: '#0D3282', '&:hover': { bgcolor: '#082052' } }}
         >
           {formSubmitting ? <CircularProgress size={20} /> : (editingKayit ? 'Güncelle' : 'Kaydet')}

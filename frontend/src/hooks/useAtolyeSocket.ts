@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { Atolye } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
+import { getSocketUrl } from '../services/socketUrl';
 
 export interface UseAtolyeSocketHandlers {
   onYeniAtolye: (atolye: Atolye) => void;
@@ -37,10 +38,7 @@ export function useAtolyeSocket(handlers: UseAtolyeSocketHandlers): void {
   } = handlers;
 
   useEffect(() => {
-    const SOCKET_URL =
-      import.meta.env.MODE === 'production'
-        ? 'https://projecrm-production.up.railway.app'
-        : 'http://localhost:5000';
+    const SOCKET_URL = getSocketUrl();
 
     const socket: Socket = io(SOCKET_URL, {
       reconnection: true,

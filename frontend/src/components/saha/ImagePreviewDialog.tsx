@@ -308,7 +308,7 @@ const ImagePreviewDialog: React.FC<Props> = ({ photos, fallbackName = 'fotograf'
               }}
             >
               <img
-                src={photos[currentImageIndex]?.data}
+                src={photos[currentImageIndex]?.url}
                 alt="Preview"
                 draggable={false}
                 style={{
@@ -387,7 +387,7 @@ const ImagePreviewDialog: React.FC<Props> = ({ photos, fallbackName = 'fotograf'
                     }}
                   >
                     <img
-                      src={photo.data}
+                      src={photo.thumbUrl}
                       alt={photo.name || `Thumb ${idx + 1}`}
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />

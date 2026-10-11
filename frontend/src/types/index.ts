@@ -228,14 +228,19 @@ export interface SahaKayit {
 export interface SahaKayitCreateDto {
   isim: string;
   soyisim: string;
-  foto_data?: string;
+  /** Depoya yüklenmiş fotoğrafların numaraları (sırasıyla). */
+  foto_ids?: number[];
   notlar?: string;
 }
 
 export interface SahaKayitUpdateDto {
   isim: string;
   soyisim: string;
-  foto_data?: string;
+  /**
+   * Kaydın yeni fotoğraf listesi (sırasıyla). Gönderilmezse fotoğraflara dokunulmaz;
+   * boş dizi bütün fotoğrafları kaldırır.
+   */
+  foto_ids?: number[];
   notlar?: string;
 }
 

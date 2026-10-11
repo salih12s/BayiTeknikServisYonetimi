@@ -1,5 +1,6 @@
 import { api } from './api';
 import { SahaKayit, SahaKayitCreateDto, SahaKayitUpdateDto, SahaElemani } from '../types';
+import { SahaPhoto, photosFromResponse } from '../utils/sahaPhoto';
 
 // Saha servisleri
 export const sahaService = {
@@ -74,9 +75,9 @@ export const sahaService = {
   },
 
   // Tek kayıdın fotoğraflarını getir (lazy load)
-  getKayitPhotos: async (id: number): Promise<string | null> => {
+  getKayitPhotos: async (id: number): Promise<SahaPhoto[]> => {
     const response = await api.get(`/saha/kayit-photos/${id}`, { timeout: 60000 });
-    return response.data.foto_data;
+    return photosFromResponse(response.data);
   },
 
   // Tek kayıdın sadece ilk fotoğrafını getir (liste önizlemesi için)
@@ -87,7 +88,7 @@ export const sahaService = {
 
   // Saha elemanının kayıtlarını getir (admin)
   getUserKayitlar: async (username: string): Promise<SahaKayit[]> => {
-    const response = await api.get(`/saha/user-kayitlar/${username}`);
+    const response = await api.get(`/saha/user-kayitlar/${encodeURIComponent(username)}`);
     return response.data;
   },
 };

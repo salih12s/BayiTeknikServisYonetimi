@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { Islem } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
+import { getSocketUrl } from '../services/socketUrl';
 
 export interface UseIslemSocketHandlers {
   onYeniIslem: (islem: Islem) => void;
@@ -34,10 +35,7 @@ export function useIslemSocket(handlers: UseIslemSocketHandlers): void {
   handlersRef.current = handlers;
 
   useEffect(() => {
-    const SOCKET_URL =
-      import.meta.env.MODE === 'production'
-        ? 'https://projecrm-production.up.railway.app'
-        : 'http://localhost:5000';
+    const SOCKET_URL = getSocketUrl();
 
     const socket: Socket = io(SOCKET_URL, {
       reconnection: true,

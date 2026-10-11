@@ -40,14 +40,17 @@ import { useSnackbar } from '../../context/SnackbarContext';
 import { sahaService } from '../../services/saha.service';
 import { SahaKayit, SahaElemani } from '../../types';
 import ImagePreviewDialog from './ImagePreviewDialog';
-import { SahaPhoto, parseSahaPhotos } from '../../utils/sahaPhoto';
+import { SahaPhoto } from '../../utils/sahaPhoto';
+import { useSahaPhotoCache } from '../../hooks/useSahaPhotoCache';
 import { buildKayitFallbackName } from './sahaPhotoName';
 import PhotoLoadingOverlay from './PhotoLoadingOverlay';
 
-// Lazy-loading thumbnail: yalnızca viewport'a girdiğinde ilk fotoğrafı backend'den çeker.
-// Performansı korumak için IntersectionObserver ve ortak bir cache kullanır.
+// Önizleme: liste satırı hazır bir adres (initialSrc) verdiyse doğrudan o gösterilir.
+// Vermediyse (eski biçimdeki kayıt) ya da adres açılamazsa (süresi dolmuş), görüntü
+// viewport'a girdiğinde backend'den istenir. IntersectionObserver ve ortak bir cache kullanır.
 interface LazyThumbnailProps {
   kayitId: number;
+  initialSrc?: string;
   alt: string;
   width?: number | string;
   height?: number | string;
@@ -59,16 +62,19 @@ interface LazyThumbnailProps {
 }
 
 const LazyThumbnail: React.FC<LazyThumbnailProps> = ({
-  kayitId, alt, width = '100%', height = 180, borderRadius = 0, objectFit = 'cover', onClick,
+  kayitId, initialSrc, alt, width = '100%', height = 180, borderRadius = 0, objectFit = 'cover', onClick,
   thumbnailCache, setThumbnailCache,
 }) => {
   const ref = React.useRef<HTMLDivElement>(null);
   const [visible, setVisible] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
+  const [initialFailed, setInitialFailed] = React.useState(false);
   const cached = thumbnailCache[kayitId];
+  const usingInitial = Boolean(initialSrc) && !initialFailed && !cached;
+  const src = usingInitial ? initialSrc : cached;
 
   React.useEffect(() => {
-    if (cached !== undefined) return; // zaten denendi
+    if (usingInitial || cached !== undefined) return; // adres hazır ya da zaten denendi
     const el = ref.current;
     if (!el) return;
     const observer = new IntersectionObserver((entries) => {
@@ -81,10 +87,10 @@ const LazyThumbnail: React.FC<LazyThumbnailProps> = ({
     }, { rootMargin: '200px' });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [cached]);
+  }, [cached, usingInitial]);
 
   React.useEffect(() => {
-    if (!visible || cached !== undefined || loading) return;
+    if (!visible || usingInitial || cached !== undefined || loading) return;
     setLoading(true);
     sahaService.getKayitThumbnail(kayitId)
       .then((data) => {
@@ -94,7 +100,16 @@ const LazyThumbnail: React.FC<LazyThumbnailProps> = ({
         setThumbnailCache((prev) => ({ ...prev, [kayitId]: null }));
       })
       .finally(() => setLoading(false));
-  }, [visible, cached, kayitId, loading, setThumbnailCache]);
+  }, [visible, usingInitial, cached, kayitId, loading, setThumbnailCache]);
+
+  const handleImageError = () => {
+    if (usingInitial) {
+      // Listedeki adres açılamadı: backend'den taze adres istenir.
+      setInitialFailed(true);
+    } else {
+      setThumbnailCache((prev) => ({ ...prev, [kayitId]: null }));
+    }
+  };
 
   return (
     <Box
@@ -114,12 +129,13 @@ const LazyThumbnail: React.FC<LazyThumbnailProps> = ({
         '&:hover': onClick ? { opacity: 0.9 } : undefined,
       }}
     >
-      {cached ? (
+      {src ? (
         <img
-          src={cached}
+          src={src}
           alt={alt}
           style={{ width: '100%', height: '100%', objectFit }}
           loading="lazy"
+          onError={handleImageError}
         />
       ) : loading ? (
         <CircularProgress size={24} />
@@ -143,7 +159,7 @@ const SahaKayitlari: React.FC = () => {
   const [selectedPhotos, setSelectedPhotos] = useState<SahaPhoto[]>([]);
   const [selectedFallbackName, setSelectedFallbackName] = useState('fotograf');
   const [photoLoading, setPhotoLoading] = useState(false);
-  const [photoCache, setPhotoCache] = useState<Record<number, SahaPhoto[]>>({});
+  const photoCache = useSahaPhotoCache();
   const [thumbnailCache, setThumbnailCache] = useState<Record<number, string | null>>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [totalRecords, setTotalRecords] = useState(0);
@@ -184,19 +200,9 @@ const SahaKayitlari: React.FC = () => {
     const kayit = kayitlar.find(k => k.id === kayitId);
     setSelectedFallbackName(buildKayitFallbackName(kayit));
 
-    // Cache'de varsa direkt aç
-    if (photoCache[kayitId]) {
-      setSelectedPhotos(photoCache[kayitId]);
-      return;
-    }
-
     try {
       setPhotoLoading(true);
-      const fotoData = await sahaService.getKayitPhotos(kayitId);
-      const fotolar = parseSahaPhotos(fotoData);
-      // Cache'e kaydet
-      setPhotoCache(prev => ({ ...prev, [kayitId]: fotolar }));
-      setSelectedPhotos(fotolar);
+      setSelectedPhotos(await photoCache.load(kayitId));
     } catch (error) {
       console.error('Fotoğraflar yüklenirken hata:', error);
       showSnackbar('Fotoğraflar yüklenirken hata oluştu!', 'error');
@@ -478,6 +484,7 @@ const SahaKayitlari: React.FC = () => {
                   <Box sx={{ position: 'relative' }}>
                     <LazyThumbnail
                       kayitId={kayit.id}
+                      initialSrc={kayit.foto_preview}
                       alt={`${kayit.isim} ${kayit.soyisim}`}
                       height={180}
                       onClick={() => handleOpenPhotos(kayit.id)}
@@ -576,6 +583,7 @@ const SahaKayitlari: React.FC = () => {
                     {hasPhotos ? (
                       <LazyThumbnail
                         kayitId={kayit.id}
+                        initialSrc={kayit.foto_preview}
                         alt={`${kayit.isim} ${kayit.soyisim}`}
                         width={50}
                         height={50}
