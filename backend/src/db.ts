@@ -212,6 +212,50 @@ export async function updateReturning<T = any>(
   });
 }
 
+/** Transaction içindeki sorgular; hepsi aynı bağlantıda çalışır. */
+export interface Transaction {
+  query<T = any>(text: string, params?: unknown[]): Promise<QueryResult<T>>;
+}
+
+/**
+ * Birden çok sorguyu tek transaction içinde çalıştırır: `run` hata fırlatırsa yapılan
+ * bütün değişiklikler geri alınır (rollback), aksi halde hepsi birlikte kalıcı olur.
+ * `run` içinde yalnızca veritabanı işi yapılmalıdır: ağ çağrısı (ör. R2) satır
+ * kilitlerini gereksiz yere uzun tutar ve geri alınamaz.
+ *
+ * İki transaction birbirinin kilidini beklerse (deadlock) veritabanı birini geri alır.
+ * O durumda hiçbir şey yazılmamıştır; `run` baştan çalıştırılır. Bu yüzden `run`
+ * yeniden çalıştırılabilir olmalıdır (yalnızca `tx.query` ile iş yapmalıdır).
+ */
+export async function transaction<T>(
+  run: (tx: Transaction) => Promise<T>,
+  deadlockRetries = 2,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const connection: PoolConnection = await pool.getConnection();
+    const tx: Transaction = {
+      async query<R = any>(text: string, params?: unknown[]): Promise<QueryResult<R>> {
+        const [raw] = await connection.query(compileQuery(text, params));
+        return toResult<R>(raw);
+      },
+    };
+    try {
+      await connection.beginTransaction();
+      const result = await run(tx);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback().catch(() => undefined);
+      if ((error as { code?: string })?.code !== 'ER_LOCK_DEADLOCK' || attempt >= deadlockRetries) {
+        throw error;
+      }
+      await wait(50 * (attempt + 1));
+    } finally {
+      connection.release();
+    }
+  }
+}
+
 // Retry mekanizmalı bağlantı testi
 async function testConnection(retries = 5, delay = 3000): Promise<void> {
   for (let i = 0; i < retries; i++) {

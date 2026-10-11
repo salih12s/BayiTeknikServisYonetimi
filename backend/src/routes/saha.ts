@@ -1,15 +1,28 @@
-﻿import express, { Request, Response } from 'express';
+﻿import express, { Request, RequestHandler, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { query, updateReturning } from '../db';
+import { query, transaction, updateReturning } from '../db';
 import authenticateToken from '../middleware/auth';
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
+import {
+  PhotoError,
+  assertUploaded,
+  attachPhotosToNewRecord,
+  createPendingUploads,
+  findUnattachedPhotoIds,
+  listRecordPhotos,
+  queueRecordPhotos,
+  queueUserPhotos,
+  replaceRecordPhotos,
+  signPreviewUrl,
+  sweepPhotoStorageInBackground,
+} from '../services/sahaPhoto.service';
+import { firstLegacyPhoto, parsePhotoIds, parseUploadRequest } from '../utils/sahaPhotoRules';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
 
-// MySQL "(foto_data IS NOT NULL)" ifadesini 1/0 döndürür; API eskisi gibi true/false verir.
 // MySQL geçersiz bir tarih metnini hata vermeden yok sayar ve filtresiz sonuç döndürür
 // (PostgreSQL hata veriyordu). Bu yüzden tarih filtreleri sorgudan önce doğrulanır.
 const DATE_PARAM = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?Z?)?$/;
@@ -22,8 +35,74 @@ function invalidDateParam(...values: unknown[]): boolean {
   });
 }
 
-function withPhotoFlag<T extends { has_photos?: unknown }>(row: T): T {
-  return { ...row, has_photos: Boolean(Number(row.has_photos)) };
+// Kayıt satırının API'ye dönen kolonları. foto_data (eski, veritabanındaki base64
+// fotoğraflar) megabaytlarca olabilir; yalnızca fotoğraf uçlarında okunur.
+const KAYIT_COLUMNS =
+  'id, saha_elemani_id, saha_elemani_username, isim, soyisim, foto_url, notlar, created_at, updated_at';
+
+/**
+ * Liste satırına fotoğraf bilgisini ekleyen kolonlar: kaydın ilk fotoğrafının önizleme
+ * adresi (R2) ve eski biçimde (foto_data) fotoğrafı olup olmadığı.
+ */
+function photoColumns(table: string): string {
+  return `(${table}.foto_data IS NOT NULL) AS has_legacy_photos,
+             (SELECT COALESCE(f.thumb_key, f.object_key) FROM saha_fotograflari f
+               WHERE f.saha_kaydi_id = ${table}.id
+               ORDER BY f.sort_order, f.id LIMIT 1) AS foto_thumb_key`;
+}
+
+/** photoColumns ile okunan satırı API biçimine çevirir: has_photos + foto_preview. */
+async function withPhotoInfo<
+  T extends { has_legacy_photos?: unknown; foto_thumb_key?: string | null },
+>(row: T) {
+  const { has_legacy_photos, foto_thumb_key, ...rest } = row;
+  return {
+    ...rest,
+    // MySQL "(foto_data IS NOT NULL)" ifadesini 1/0 döndürür; API true/false verir.
+    has_photos: Boolean(foto_thumb_key) || Boolean(Number(has_legacy_photos)),
+    foto_preview: await signPreviewUrl(foto_thumb_key),
+  };
+}
+
+// Saha elemanı, kullanıcı, bayi ve yönetici numaraları ayrı tablolardan gelir ve
+// çakışır (1 numaralı bayi ile 1 numaralı saha elemanı farklı kişilerdir). "Kendi
+// kaydın" kontrolü yalnızca numaraya baktığı için bu uçlar saha rolü ister.
+const requireSaha: RequestHandler = (req, res, next) => {
+  if (req.user?.role !== 'saha') {
+    res.status(403).json({ message: 'Bu işlem yalnızca saha elemanları içindir' });
+    return;
+  }
+  next();
+};
+
+// Eski arayüz fotoğrafları base64 olarak kayıt gövdesinde gönderiyordu. Sessizce yok
+// saymak fotoğrafların kaybolmasına yol açar; açık bir hata döner.
+function hasLegacyPhotoPayload(body: { foto_data?: unknown }): boolean {
+  return typeof body?.foto_data === 'string' && body.foto_data.length > 0;
+}
+
+const LEGACY_PAYLOAD_MESSAGE = 'Uygulama güncellendi. Lütfen sayfayı yenileyip tekrar deneyin.';
+
+function sendError(res: Response, error: unknown, label: string): void {
+  if (error instanceof PhotoError) {
+    res.status(error.status).json({ message: error.message });
+    return;
+  }
+  logger.error(label, error);
+  res.status(500).json({ message: 'Sunucu hatası' });
+}
+
+// Fotoğrafları kim görebilir: saha elemanı yalnızca kendi kayıtlarınınkini; kullanıcı
+// ve yönetici (Saha Kayıtları ekranı) hepsini; bayi hiçbirini.
+function canViewPhotos(role: string | undefined): boolean {
+  return role !== 'bayi';
+}
+
+function ownsOrMayViewAll(
+  user: { id: number; role?: string },
+  kayit: { saha_elemani_id: number | null },
+): boolean {
+  return user.role !== 'saha' || kayit.saha_elemani_id === user.id;
 }
 
 // Saha Elemanı Girişi
@@ -170,7 +249,14 @@ router.delete('/users/:id', authenticateToken, async (req: Request, res: Respons
   try {
     const { id } = req.params;
 
-    await query('DELETE FROM saha_elemanlari WHERE id = $1', [id]);
+    // Elemanın kayıtları ve fotoğraf satırları FK ile birlikte silinir; R2'deki
+    // dosyaların adresleri aynı transaction'da silme kuyruğuna yazılır.
+    await transaction(async (tx) => {
+      await tx.query('SELECT id FROM saha_elemanlari WHERE id = $1 FOR UPDATE', [id]);
+      await queueUserPhotos(tx, Number(id));
+      await tx.query('DELETE FROM saha_elemanlari WHERE id = $1', [id]);
+    });
+    sweepPhotoStorageInBackground();
 
     res.json({ message: 'Saha elemanı başarıyla silindi' });
   } catch (error) {
@@ -179,37 +265,71 @@ router.delete('/users/:id', authenticateToken, async (req: Request, res: Respons
   }
 });
 
-// Yeni Kayıt Ekle (Saha Elemanı)
-router.post('/kayit', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+// Fotoğraf yükleme adresi al (Saha Elemanı). Tarayıcı her fotoğrafı dönen imzalı
+// adrese doğrudan yükler, sonra numaralarını kayıt gövdesinde foto_ids ile gönderir.
+router.post('/foto-yukleme', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { isim, soyisim, foto_data, notlar } = req.body;
+    const photos = parseUploadRequest(req.body);
+    if (!photos.ok) {
+      res.status(400).json({ message: photos.message });
+      return;
+    }
+
+    const fotolar = await createPendingUploads(req.user!.id, photos.value);
+    res.status(201).json({ fotolar });
+  } catch (error) {
+    sendError(res, error, 'Fotoğraf yükleme adresi hatası:');
+  }
+});
+
+// Yeni Kayıt Ekle (Saha Elemanı)
+router.post('/kayit', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { isim, soyisim, notlar } = req.body;
     const user = req.user!;
 
     if (!isim || !soyisim) {
       res.status(400).json({ message: 'İsim ve soyisim zorunludur' });
       return;
     }
+    if (hasLegacyPhotoPayload(req.body)) {
+      res.status(400).json({ message: LEGACY_PAYLOAD_MESSAGE });
+      return;
+    }
+    const photoIds = parsePhotoIds(req.body.foto_ids);
+    if (!photoIds.ok) {
+      res.status(400).json({ message: photoIds.message });
+      return;
+    }
+    const ids = photoIds.value ?? [];
 
-    const newRecord = await query(
-      `INSERT INTO saha_kayitlari 
-        (saha_elemani_id, saha_elemani_username, isim, soyisim, foto_data, notlar, created_at, updated_at) 
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(6), NOW(6)) 
-      RETURNING *`,
-      [user.id, user.username, isim, soyisim, foto_data || null, notlar || null]
-    );
+    await assertUploaded(user.id, ids);
+
+    // Kayıt ve fotoğraflarının bağlanması tek transaction'dır: fotoğraf bağlanamazsa
+    // kayıt da eklenmez.
+    const kayit = await transaction(async (tx) => {
+      const inserted = await tx.query(
+        `INSERT INTO saha_kayitlari
+          (saha_elemani_id, saha_elemani_username, isim, soyisim, notlar, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW(6), NOW(6))
+        RETURNING ${KAYIT_COLUMNS}`,
+        [user.id, user.username, isim, soyisim, notlar || null]
+      );
+      await attachPhotosToNewRecord(tx, user.id, inserted.rows[0].id, ids);
+      return inserted.rows[0];
+    });
 
     res.status(201).json({
       message: 'Kayıt başarıyla eklendi',
-      kayit: newRecord.rows[0]
+      kayit: { ...kayit, has_photos: ids.length > 0 }
     });
   } catch (error) {
-    logger.error('Kayıt ekleme hatası:', error);
-    res.status(500).json({ message: 'Sunucu hatası' });
+    sendError(res, error, 'Kayıt ekleme hatası:');
   }
 });
 
 // Kendi Kayıtlarını Getir (Saha Elemanı) - paginated + search + today
-router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/kayitlar', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
     const { search, startDate, endDate, today, page, limit } = req.query;
@@ -261,7 +381,7 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
     const countQuery = `SELECT COUNT(*) as total FROM saha_kayitlari${whereSql}`;
     const dataQuery = `
       SELECT id, saha_elemani_id, saha_elemani_username, isim, soyisim, notlar, created_at, updated_at,
-             (foto_data IS NOT NULL) as has_photos
+             ${photoColumns('saha_kayitlari')}
       FROM saha_kayitlari${whereSql}
       ORDER BY created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -286,7 +406,7 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
     const total = parseInt(countResult.rows[0].total);
 
     res.json({
-      data: records.rows.map(withPhotoFlag),
+      data: await Promise.all(records.rows.map(withPhotoInfo)),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -305,7 +425,7 @@ router.get('/kayitlar', authenticateToken, async (req: Request, res: Response): 
 });
 
 // Tek Kayıt Getir
-router.get('/kayit/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/kayit/:id', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const user = req.user!;
@@ -328,45 +448,93 @@ router.get('/kayit/:id', authenticateToken, async (req: Request, res: Response):
 });
 
 // Kayıt Güncelle
-router.put('/kayit/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+//
+// foto_ids kaydın YENİ fotoğraf listesidir (sırasıyla): kayıtta kalan fotoğrafların ve
+// yeni yüklenenlerin numaraları. Alan hiç gönderilmezse fotoğraflara dokunulmaz;
+// boş dizi bütün fotoğrafları kaldırır.
+router.put('/kayit/:id', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
-    const { isim, soyisim, foto_data, notlar } = req.body;
+    const kayitId = Number(req.params.id);
+    const { isim, soyisim, notlar } = req.body;
     const user = req.user!;
 
-    const result = await updateReturning(
-      `UPDATE saha_kayitlari 
-       SET isim = $1, soyisim = $2, foto_data = $3, notlar = $4, updated_at = NOW(6)
-       WHERE id = $5 AND saha_elemani_id = $6
-       RETURNING *`,
-      [isim, soyisim, foto_data, notlar, id, user.id]
-    );
+    if (!isim || !soyisim) {
+      res.status(400).json({ message: 'İsim ve soyisim zorunludur' });
+      return;
+    }
+    if (hasLegacyPhotoPayload(req.body)) {
+      res.status(400).json({ message: LEGACY_PAYLOAD_MESSAGE });
+      return;
+    }
+    const photoIds = parsePhotoIds(req.body.foto_ids);
+    if (!photoIds.ok) {
+      res.status(400).json({ message: photoIds.message });
+      return;
+    }
+    const ids = photoIds.value;
 
-    if (result.rows.length === 0) {
+    if (ids) {
+      await assertUploaded(user.id, await findUnattachedPhotoIds(kayitId, ids));
+    }
+
+    const kayit = await transaction(async (tx) => {
+      // Satır kilidi: aynı kayda gelen iki güncelleme sırayla çalışır.
+      const locked = await tx.query(
+        'SELECT id FROM saha_kayitlari WHERE id = $1 AND saha_elemani_id = $2 FOR UPDATE',
+        [kayitId, user.id]
+      );
+      if (locked.rows.length === 0) return null;
+
+      // Fotoğraf listesi gönderildiyse eski biçimdeki (foto_data) fotoğraflar da kalkar:
+      // arayüz kalanları R2'ye yükleyip numaralarını listeye eklemiştir.
+      await tx.query(
+        `UPDATE saha_kayitlari
+         SET isim = $1, soyisim = $2, notlar = $3, updated_at = NOW(6)${ids ? ', foto_data = NULL' : ''}
+         WHERE id = $4`,
+        [isim, soyisim, notlar, kayitId]
+      );
+      if (ids) await replaceRecordPhotos(tx, user.id, kayitId, ids);
+
+      const updated = await tx.query(
+        `SELECT ${KAYIT_COLUMNS}, ${photoColumns('saha_kayitlari')} FROM saha_kayitlari WHERE id = $1`,
+        [kayitId]
+      );
+      return updated.rows[0];
+    });
+
+    if (!kayit) {
       res.status(404).json({ message: 'Kayıt bulunamadı' });
       return;
     }
+    sweepPhotoStorageInBackground();
 
     res.json({
       message: 'Kayıt başarıyla güncellendi',
-      kayit: result.rows[0]
+      kayit: await withPhotoInfo(kayit)
     });
   } catch (error) {
-    logger.error('Kayıt güncelleme hatası:', error);
-    res.status(500).json({ message: 'Sunucu hatası' });
+    sendError(res, error, 'Kayıt güncelleme hatası:');
   }
 });
 
 // Kayıt Sil
-router.delete('/kayit/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.delete('/kayit/:id', authenticateToken, requireSaha, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const kayitId = Number(req.params.id);
     const user = req.user!;
 
-    await query(
-      'DELETE FROM saha_kayitlari WHERE id = $1 AND saha_elemani_id = $2',
-      [id, user.id]
-    );
+    // Fotoğraf satırları FK ile birlikte silinir; R2'deki dosyaların adresleri aynı
+    // transaction'da silme kuyruğuna yazılır ve dosyalar işlemden sonra silinir.
+    await transaction(async (tx) => {
+      const locked = await tx.query(
+        'SELECT id FROM saha_kayitlari WHERE id = $1 AND saha_elemani_id = $2 FOR UPDATE',
+        [kayitId, user.id]
+      );
+      if (locked.rows.length === 0) return;
+      await queueRecordPhotos(tx, kayitId);
+      await tx.query('DELETE FROM saha_kayitlari WHERE id = $1', [kayitId]);
+    });
+    sweepPhotoStorageInBackground();
 
     res.json({ message: 'Kayıt başarıyla silindi' });
   } catch (error) {
@@ -379,6 +547,30 @@ router.delete('/kayit/:id', authenticateToken, async (req: Request, res: Respons
 router.get('/kayit-thumbnail/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const user = req.user!;
+    if (!canViewPhotos(user.role)) {
+      res.status(403).json({ message: 'Bu işlem için yetkiniz yok' });
+      return;
+    }
+
+    const kayit = await query(
+      `SELECT saha_elemani_id, ${photoColumns('saha_kayitlari')} FROM saha_kayitlari WHERE id = $1`,
+      [id]
+    );
+    if (kayit.rows.length === 0 || !ownsOrMayViewAll(user, kayit.rows[0])) {
+      res.status(404).json({ message: 'Kayıt veya fotoğraf bulunamadı' });
+      return;
+    }
+
+    // R2'deki fotoğraf: imzalı önizleme adresi.
+    if (kayit.rows[0].foto_thumb_key) {
+      const preview = await signPreviewUrl(kayit.rows[0].foto_thumb_key);
+      if (!preview) throw new PhotoError(503, 'Fotoğraf deposu yapılandırılmamış');
+      res.json({ foto_preview: preview });
+      return;
+    }
+
+    // Eski biçim: fotoğraflar veritabanında (foto_data) base64 olarak duruyor.
     const record = await query(
       'SELECT foto_data FROM saha_kayitlari WHERE id = $1',
       [id]
@@ -389,19 +581,9 @@ router.get('/kayit-thumbnail/:id', authenticateToken, async (req: Request, res: 
       return;
     }
 
-    // foto_data JSON string olarak saklanıyor. İki biçim desteklenir:
-    //   ESKİ: ["data:image/...", ...]
-    //   YENİ: [{ name: "IMG_2034.jpg", data: "data:image/..." }, ...]
     // Yalnızca ilk fotoğrafın data URL'ini döndür (bandwidth tasarrufu için)
     try {
-      const parsed = JSON.parse(record.rows[0].foto_data);
-      const first = Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : null;
-      const firstPhoto =
-        typeof first === 'string'
-          ? first
-          : first && typeof first === 'object' && typeof first.data === 'string'
-            ? first.data
-            : null;
+      const firstPhoto = firstLegacyPhoto(record.rows[0].foto_data);
 
       if (!firstPhoto) {
         res.status(404).json({ message: 'Fotoğraf bulunamadı' });
@@ -412,29 +594,43 @@ router.get('/kayit-thumbnail/:id', authenticateToken, async (req: Request, res: 
       res.status(500).json({ message: 'Fotoğraf verisi okunamadı' });
     }
   } catch (error) {
-    logger.error('Thumbnail getirme hatası:', error);
-    res.status(500).json({ message: 'Sunucu hatası' });
+    sendError(res, error, 'Thumbnail getirme hatası:');
   }
 });
 
 // Tek Kayıdın Fotoğraflarını Getir
+//
+// Yanıt: { fotolar, foto_data }. "fotolar" R2'deki fotoğraflardır (imzalı görüntüleme
+// ve indirme adresleriyle). Kaydın fotoğrafları henüz R2'ye taşınmamışsa "fotolar" boş,
+// "foto_data" eski biçimdeki base64 yüktür.
 router.get('/kayit-photos/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const record = await query(
-      'SELECT foto_data FROM saha_kayitlari WHERE id = $1',
+    const user = req.user!;
+    if (!canViewPhotos(user.role)) {
+      res.status(403).json({ message: 'Bu işlem için yetkiniz yok' });
+      return;
+    }
+
+    const kayit = await query(
+      'SELECT id, saha_elemani_id, isim, soyisim, created_at FROM saha_kayitlari WHERE id = $1',
       [id]
     );
-
-    if (record.rows.length === 0) {
+    if (kayit.rows.length === 0 || !ownsOrMayViewAll(user, kayit.rows[0])) {
       res.status(404).json({ message: 'Kayıt bulunamadı' });
       return;
     }
 
-    res.json({ foto_data: record.rows[0].foto_data });
+    const fotolar = await listRecordPhotos(kayit.rows[0]);
+    let fotoData: string | null = null;
+    if (fotolar.length === 0) {
+      const legacy = await query('SELECT foto_data FROM saha_kayitlari WHERE id = $1', [id]);
+      fotoData = legacy.rows[0]?.foto_data ?? null;
+    }
+
+    res.json({ fotolar, foto_data: fotoData });
   } catch (error) {
-    logger.error('Fotoğraf getirme hatası:', error);
-    res.status(500).json({ message: 'Sunucu hatası' });
+    sendError(res, error, 'Fotoğraf getirme hatası:');
   }
 });
 
@@ -459,7 +655,7 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
     let sql = `
       SELECT sk.id, sk.saha_elemani_id, sk.saha_elemani_username, sk.isim, sk.soyisim, 
              sk.notlar, sk.created_at, sk.updated_at,
-             (sk.foto_data IS NOT NULL) as has_photos,
+             ${photoColumns('sk')},
              se.ad_soyad as saha_elemani_ad_soyad 
       FROM saha_kayitlari sk
       LEFT JOIN saha_elemanlari se ON sk.saha_elemani_id = se.id
@@ -535,7 +731,7 @@ router.get('/all-kayitlar', authenticateToken, async (req: Request, res: Respons
     const total = parseInt(countResult.rows[0].total);
 
     res.json({
-      data: records.rows.map(withPhotoFlag),
+      data: await Promise.all(records.rows.map(withPhotoInfo)),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -560,14 +756,14 @@ router.get('/user-kayitlar/:username', authenticateToken, async (req: Request, r
 
     const records = await query(
       `SELECT id, saha_elemani_id, saha_elemani_username, isim, soyisim, notlar, created_at, updated_at,
-              (foto_data IS NOT NULL) as has_photos
-       FROM saha_kayitlari 
+              ${photoColumns('saha_kayitlari')}
+       FROM saha_kayitlari  
        WHERE saha_elemani_username = $1 
        ORDER BY created_at DESC`,
       [username]
     );
 
-    res.json(records.rows.map(withPhotoFlag));
+    res.json(await Promise.all(records.rows.map(withPhotoInfo)));
   } catch (error) {
     logger.error('Kullanıcı saha kayıtları getirme hatası:', error);
     res.status(500).json({ message: 'Sunucu hatası' });

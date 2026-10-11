@@ -21,6 +21,7 @@ import printerSettingsRoutes from './routes/printerSettings';
 import sahaRoutes from './routes/saha';
 import karalisteRoutes from './routes/karaliste';
 import { errorHandler } from './middleware/errorHandler';
+import { sweepPhotoStorageInBackground } from './services/sahaPhoto.service';
 
 dotenv.config();
 
@@ -142,5 +143,11 @@ process.on('uncaughtException', (err) => {
 server.listen(PORT, () => {
   console.log(`✅ Server ${PORT} portunda çalışıyor`);
 });
+
+// R2 temizliği: yarım kalmış fotoğraf yüklemeleri ve silinmeyi bekleyen dosyalar.
+// Silme işlemleri kendi temizliğini hemen tetikler; bu zamanlayıcı yarıda kalanları
+// (ör. R2'ye o an ulaşılamadıysa) ve süresi dolan yüklemeleri toplar.
+setTimeout(sweepPhotoStorageInBackground, 60 * 1000).unref();
+setInterval(sweepPhotoStorageInBackground, 60 * 60 * 1000).unref();
 
 export { app, io };

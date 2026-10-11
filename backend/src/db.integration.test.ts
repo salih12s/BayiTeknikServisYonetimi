@@ -182,6 +182,76 @@ describe('db (MariaDB entegrasyon)', options, () => {
     assert.equal(rows[0].isim, 'itest A');
   });
 
+  it('transaction: hata olursa bütün adımlar geri alınır ve işlem yeniden denenmez', async () => {
+    let attempts = 0;
+    await assert.rejects(
+      db.transaction(async (tx) => {
+        attempts += 1;
+        await tx.query('INSERT INTO markalar (isim) VALUES ($1)', ['itest tx 1']);
+        await tx.query('INSERT INTO markalar (isim) VALUES ($1)', ['itest tx 2']);
+        throw new Error('ikinci adımdan sonra hata');
+      }),
+      /ikinci adımdan sonra hata/,
+    );
+    assert.equal(attempts, 1);
+    const { rows } = await db.query("SELECT COUNT(*) AS n FROM markalar WHERE isim LIKE 'itest tx%'");
+    assert.equal(rows[0].n, '0');
+  });
+
+  it('transaction: adımlar birlikte kalıcı olur ve sonucu döner', async () => {
+    const id = await db.transaction(async (tx) => {
+      const inserted = await tx.query('INSERT INTO markalar (isim) VALUES ($1) RETURNING id', [
+        'itest tx kalici',
+      ]);
+      const updated = await tx.query('UPDATE markalar SET kategori = $1 WHERE id = $2', [
+        'k',
+        inserted.rows[0].id,
+      ]);
+      assert.equal(updated.rowCount, 1);
+      return inserted.rows[0].id;
+    });
+    const { rows } = await db.query('SELECT kategori FROM markalar WHERE id = $1', [id]);
+    assert.equal(rows[0].kategori, 'k');
+  });
+
+  // Kilitlenme (deadlock): iki transaction birbirinin kilitlediği satırı bekler; veritabanı
+  // birini kurban seçip geri alır. Kurban baştan çalıştırılmazsa kullanıcı 500 görür.
+  it('transaction: kilitlenme kurbanı baştan çalıştırılır, iki işlem de tamamlanır', async () => {
+    const a = (await db.query('INSERT INTO markalar (isim) VALUES ($1) RETURNING id', ['itest kilit A'])).rows[0].id;
+    const b = (await db.query('INSERT INTO markalar (isim) VALUES ($1) RETURNING id', ['itest kilit B'])).rows[0].id;
+    const gate = () => {
+      let open!: () => void;
+      const opened = new Promise<void>((resolve) => { open = resolve; });
+      return { open, opened };
+    };
+    const firstHoldsA = gate();
+    const secondHoldsB = gate();
+    let attempts = 0;
+    const update = 'UPDATE markalar SET kategori = $1 WHERE id = $2';
+
+    await Promise.all([
+      db.transaction(async (tx) => {
+        attempts += 1;
+        await tx.query(update, ['birinci', a]);
+        firstHoldsA.open();
+        await secondHoldsB.opened;
+        await tx.query(update, ['birinci', b]);
+      }),
+      db.transaction(async (tx) => {
+        attempts += 1;
+        await tx.query(update, ['ikinci', b]);
+        secondHoldsB.open();
+        await firstHoldsA.opened;
+        await tx.query(update, ['ikinci', a]);
+      }),
+    ]);
+
+    assert.equal(attempts, 3);
+    // Yarım iş kalmaz: iki satırı da en son aynı işlem yazmıştır.
+    const { rows } = await db.query('SELECT kategori FROM markalar WHERE id IN ($1, $2)', [a, b]);
+    assert.equal(rows[0].kategori, rows[1].kategori);
+  });
+
   it('güvenlik: sayı, boolean, nesne ve dizi parametresi metin kolonla eşleşmez', async () => {
     await db.query("INSERT INTO users (username, password) VALUES ('itest_user', 'x')");
     for (const username of [0, 1, false, true, { $gt: '' }, ['itest_user'], "' OR '1'='1"]) {
