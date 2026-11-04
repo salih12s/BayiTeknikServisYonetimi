@@ -6,7 +6,7 @@
 
 Müşteri kabulünden servis kaydına, atölye sürecinden saha ekiplerine ve yönetsel raporlamaya kadar tüm operasyonu gerçek zamanlı, rol tabanlı ve izlenebilir bir yapıda yönetir.
 
-[![Kalite Kontrolleri](https://github.com/salih12s/projecrm/actions/workflows/ci.yml/badge.svg)](https://github.com/salih12s/projecrm/actions/workflows/ci.yml)
+[![Kalite Kontrolleri](https://github.com/salih12s/BayiTeknikServisYonetimi/actions/workflows/ci.yml/badge.svg)](https://github.com/salih12s/BayiTeknikServisYonetimi/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)

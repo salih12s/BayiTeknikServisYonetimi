@@ -33,12 +33,12 @@
   "type": "commonjs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/salih12s/projecrm.git"
+    "url": "git+https://github.com/salih12s/BayiTeknikServisYonetimi.git"
   },
   "bugs": {
-    "url": "https://github.com/salih12s/projecrm/issues"
+    "url": "https://github.com/salih12s/BayiTeknikServisYonetimi/issues"
   },
-  "homepage": "https://github.com/salih12s/projecrm#readme",
+  "homepage": "https://github.com/salih12s/BayiTeknikServisYonetimi#readme",
   "dependencies": {
     "@emotion/react": "^11.11.1",
     "@emotion/styled": "^11.11.0",
