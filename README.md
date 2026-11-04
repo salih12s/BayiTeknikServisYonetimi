@@ -10,7 +10,7 @@ Müşteri kabulünden servis kaydına, atölye sürecinden saha ekiplerine ve y�
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![MariaDB](https://img.shields.io/badge/MySQL%20%2F%20MariaDB-11-003545?logo=mariadb&logoColor=white)](https://mariadb.org/)
 [![Socket.IO](https://img.shields.io/badge/Socket.IO-Gerçek%20Zamanlı-010101?logo=socketdotio&logoColor=white)](https://socket.io/)
 [![Lisans](https://img.shields.io/badge/Lisans-MIT-2ea44f)](LICENSE)
 
@@ -18,15 +18,15 @@ Müşteri kabulünden servis kaydına, atölye sürecinden saha ekiplerine ve y�
 
 ---
 
-
 <!-- english-overview:start -->
+
 ## English Overview
 
 Technical Service & Field Operations Platform is a full-stack operations platform for technical service, workshop, dealer, and field teams. It centralizes customer and device intake, status-based service tracking, workshop workflows, mobile photo records, customer history, real-time updates, and PDF/Excel output.
 
 ### My Contribution
 
-I designed and implemented the product across the React/TypeScript frontend, Node.js/Express API, PostgreSQL data layer, role-based workspaces, real-time Socket.IO events, reporting flows, and automated quality checks.
+I designed and implemented the product across the React/TypeScript frontend, Node.js/Express API, MySQL/MariaDB data layer, Cloudflare R2 photo storage, role-based workspaces, real-time Socket.IO events, reporting flows, and automated quality checks.
 
 ### Engineering Challenges
 
@@ -51,7 +51,7 @@ Uygulamanın odaklandığı temel iş problemleri:
 - Operasyon verisinin PDF, Excel ve özelleştirilebilir servis formuna dönüştürülmesi
 
 > [!IMPORTANT]
-> Bu README’deki tüm ekranlar yalnızca dokümantasyon için oluşturulmuş, izole bir yerel PostgreSQL veritabanından alınmıştır. Görünen adlar, telefonlar, adresler, kullanıcılar, tutarlar ve kayıtlar tamamen sentetik örnek verilerdir. Canlı veritabanına bağlanılmamış ve gerçek müşteri verisi kullanılmamıştır.
+> Bu README’deki tüm ekranlar yalnızca dokümantasyon için oluşturulmuş, izole bir yerel veritabanından alınmıştır. Görünen adlar, telefonlar, adresler, kullanıcılar, tutarlar ve kayıtlar tamamen sentetik örnek verilerdir. Canlı veritabanına bağlanılmamış ve gerçek müşteri verisi kullanılmamıştır.
 
 ## Ürün deneyimi
 
@@ -181,7 +181,7 @@ flowchart LR
     UI["React + TypeScript<br/>Material UI"]
     API["Express + TypeScript<br/>REST API"]
     RT["Socket.IO<br/>Anlık Olaylar"]
-    DB[("PostgreSQL")]
+    DB[("MySQL / MariaDB")]
     DOC["PDF · Excel<br/>Yazdırma"]
 
     K --> UI
@@ -192,7 +192,7 @@ flowchart LR
     UI --> DOC
 ```
 
-Frontend; rol bazlı çalışma alanlarını, veri tablolarını, formları ve çıktı araçlarını sunar. Backend; kimlik doğrulama, iş kuralları, veri erişimi ve gerçek zamanlı olayların merkezidir. PostgreSQL operasyon verisini kalıcı olarak saklarken Socket.IO açık oturumların değişiklikleri sayfa yenilemeden görmesini sağlar.
+Frontend; rol bazlı çalışma alanlarını, veri tablolarını, formları ve çıktı araçlarını sunar. Backend; kimlik doğrulama, iş kuralları, veri erişimi ve gerçek zamanlı olayların merkezidir. MySQL/MariaDB operasyon verisini kalıcı olarak saklar, saha fotoğrafları ise veritabanını şişirmemesi için Cloudflare R2'de durur (veritabanında yalnızca adresleri tutulur). Socket.IO açık oturumların değişiklikleri sayfa yenilemeden görmesini sağlar.
 
 ## Mühendislik yaklaşımı
 
@@ -202,24 +202,25 @@ Frontend; rol bazlı çalışma alanlarını, veri tablolarını, formları ve �
 | Büyük veri kümeleri    | Sunucu taraflı sayfalama, kolon filtreleri ve kademeli tablo gösterimi              |
 | Arama deneyimi         | Yoğun filtre girişlerinde debounce kullanımı                                        |
 | Veritabanı performansı | Durum, tarih, telefon, teknisyen ve sıralama alanlarında hedefli indeksler          |
-| Bağlantı sürekliliği   | PostgreSQL bağlantı havuzu ve geçici sorgu hataları için sınırlı yeniden deneme     |
+| Bağlantı sürekliliği   | MySQL/MariaDB bağlantı havuzu ve geçici sorgu hataları için sınırlı yeniden deneme  |
 | Frontend performansı   | Ağır ekranlarda `React.lazy`, `Suspense` ve parçalı yükleme                         |
 | Kod güvenilirliği      | Strict TypeScript, ESLint, Prettier ve otomatik kalite kontrolleri                  |
 | Doküman üretimi        | PDF, Excel ve özelleştirilebilir yazdırma şablonları                                |
 
 ## Teknoloji haritası
 
-| Katman                  | Teknolojiler                                        |
-| ----------------------- | --------------------------------------------------- |
-| Web arayüzü             | React 18, TypeScript, Vite, Material UI             |
-| İstemci veri akışı      | React Context, custom hooks, Axios                  |
-| Sunucu                  | Node.js, Express, TypeScript                        |
-| Veritabanı              | PostgreSQL, `pg` bağlantı havuzu                    |
-| Gerçek zamanlı iletişim | Socket.IO                                           |
-| Kimlik doğrulama        | JWT, bcrypt                                         |
-| Raporlama               | pdf-lib, jsPDF, jspdf-autotable, xlsx               |
-| Arayüz yardımcıları     | react-window, @hello-pangea/dnd                     |
-| Kalite altyapısı        | GitHub Actions, ESLint, Prettier, TypeScript strict |
+| Katman                  | Teknolojiler                                         |
+| ----------------------- | ---------------------------------------------------- |
+| Web arayüzü             | React 18, TypeScript, Vite, Material UI              |
+| İstemci veri akışı      | React Context, custom hooks, Axios                   |
+| Sunucu                  | Node.js, Express, TypeScript                         |
+| Veritabanı              | MySQL/MariaDB, `mysql2` bağlantı havuzu              |
+| Fotoğraf deposu         | Cloudflare R2 (imzalı adresler, tarayıcıda küçültme) |
+| Gerçek zamanlı iletişim | Socket.IO                                            |
+| Kimlik doğrulama        | JWT, bcrypt                                          |
+| Raporlama               | pdf-lib, jsPDF, jspdf-autotable, xlsx                |
+| Arayüz yardımcıları     | react-window, @hello-pangea/dnd                      |
+| Kalite altyapısı        | GitHub Actions, ESLint, Prettier, TypeScript strict  |
 
 ## Güvenlik ve veri yaklaşımı
 

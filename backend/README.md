@@ -1,6 +1,6 @@
 # ProjeCRM Backend
 
-ProjeCRM’in sunucu katmanı; kimlik doğrulama, rol bazlı erişim, iş kuralları, PostgreSQL veri erişimi ve gerçek zamanlı olay yönetiminden sorumludur.
+ProjeCRM’in sunucu katmanı; kimlik doğrulama, rol bazlı erişim, iş kuralları, MySQL/MariaDB veri erişimi, Cloudflare R2 fotoğraf depolama ve gerçek zamanlı olay yönetiminden sorumludur.
 
 ## Sorumluluklar
 
@@ -22,13 +22,14 @@ src/
 ├── constants/    Paylaşılan olay ve sabit tanımları
 ├── types/        TypeScript veri sözleşmeleri
 ├── scripts/      Şema, indeks ve bakım araçları
-├── db.ts         PostgreSQL bağlantı havuzu
+├── db.ts         MySQL/MariaDB bağlantı havuzu (mysql2)
+├── migrations/   mysql/ güncel şema; postgres-archive/ eski PostgreSQL taslakları
 └── server.ts     Express ve Socket.IO uygulaması
 ```
 
 ## Teknik yaklaşım
 
-- Parametreli PostgreSQL sorguları
+- Parametreli MySQL/MariaDB sorguları
 - Bağlantı havuzu ve geçici hatalar için sınırlı yeniden deneme
 - Durum, tarih, telefon ve sıralama alanlarında performans indeksleri
 - JWT tabanlı korunan kaynaklar

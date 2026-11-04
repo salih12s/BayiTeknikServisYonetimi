@@ -22,7 +22,8 @@
     "typescript",
     "react",
     "nodejs",
-    "postgresql",
+    "mysql",
+    "mariadb",
     "material-ui",
     "socket.io",
     "real-time"
