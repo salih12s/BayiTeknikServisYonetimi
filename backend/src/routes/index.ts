@@ -28,7 +28,8 @@ import bayiKayitRoutes from './bayiKayit';
  *   bayi     | yalnızca KENDİ atölye kayıtları (salt okunur; süzme atolye.ts içinde)
  *   saha     | yalnızca kendi saha kayıtları (kurallar saha.ts içinde)
  *
- * Giriş uçları (auth, admin/login, saha/login), bayi kayıt formu ve log ucu herkese açıktır.
+ * Giriş uçları (auth, admin/login, saha/login), bayi kayıt formu, ilçe/mahalle listesi ve
+ * log ucu herkese açıktır.
  */
 export function mountApiRoutes(app: express.Express): void {
   // Herkese açık giriş uçları; admin.ts ve saha.ts kendi içinde rol kontrolü yapar.
@@ -54,7 +55,8 @@ export function mountApiRoutes(app: express.Express): void {
   app.use('/api/aksesuarlar', ...definitions, aksesuarlarRoutes);
   app.use('/api/urunler', ...definitions, urunlerRoutes);
 
-  const locations = [authMiddleware, allowRoles({ GET: STAFF })];
-  app.use('/api/ilceler', ...locations, locationsRoutes);
-  app.use('/api/locations/ilceler', ...locations, locationsRoutes);
+  // İlçe/mahalle adları herkese açık adres verisidir ve bayiye gönderilen GİRİŞSİZ kayıt
+  // formu bunları kullanır; bu yüzden giriş istenmez. Rota yalnızca okuma (GET) içerir.
+  app.use('/api/ilceler', locationsRoutes);
+  app.use('/api/locations/ilceler', locationsRoutes);
 }

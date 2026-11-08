@@ -103,6 +103,17 @@ describe('güvenlik: yetki, pasif hesap, bayi şifresi (API + MariaDB)', options
     assert.equal(rows.rows.length, 0);
   });
 
+  // Regresyon (2026-11-08, yayından önce paket kontrolünde yakalandı): izin tablosu ilçe
+  // ve mahalle listesini yalnız ofise açınca bayiye gönderilen GİRİŞSİZ kayıt formunda
+  // mahalle seçilemiyor, bayi kayıt gönderemiyordu. Bu liste herkese açık adres verisidir.
+  it('ilçe ve mahalle listesi girişsiz okunur (bayi kayıt formu kullanır)', async () => {
+    for (const url of ['/api/ilceler', '/api/ilceler/1/mahalleler', '/api/locations/ilceler/1/mahalleler']) {
+      const res = await call('GET', url);
+      assert.equal(res.status, 200, url);
+      assert.ok(Array.isArray(res.body), url);
+    }
+  });
+
   it('yönetici uçları yalnız yöneticiye: kullanıcı ve bayi 403, yönetici 200', async () => {
     for (const tok of [userToken(), bayiToken()]) {
       assert.equal((await call('GET', '/api/admin/users', tok)).status, 403);
