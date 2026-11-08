@@ -13,15 +13,31 @@ const PHOTO_QUALITY = 0.82;
 const THUMB_MAX_EDGE = 400;
 const THUMB_QUALITY = 0.8;
 
-/** Sunucunun kabul ettiği dosya tipleri (küçültülemeyen orijinal için). */
+/** Sunucunun kabul ettiği dosya tipleri (orijinali olduğu gibi saklanan küçük dosyalar için). */
 const UPLOADABLE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-/** Seçilebilecek en büyük dosya. */
-export const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
+/**
+ * Seçilebilecek en büyük dosya. Fotoğraf yüklenmeden önce küçültüldüğü için büyük olması
+ * sorun değildir (50-200 MP telefon kameraları 15-30 MB çekebilir); orijinal yalnızca
+ * küçültülmüş halinden küçükse saklanır.
+ */
+export const MAX_SOURCE_BYTES = 30 * 1024 * 1024;
 export const MAX_PHOTOS = 5;
 
+const READ_TIMEOUT_MS = 60000;
+const READ_ATTEMPTS = 3;
 const DECODE_TIMEOUT_MS = 20000;
+/** Normal açma başarısız olursa (ör. telefonun belleği yetmedi) küçültülerek açılan genişlik. */
+const REDUCED_DECODE_WIDTH = 1500;
 const UPLOAD_TIMEOUT_MS = 120000;
 const UPLOAD_ATTEMPTS = 3;
+
+/** Fotoğraf eklenemedi; `message` kullanıcıya olduğu gibi gösterilir. */
+export class PhotoPrepareError extends Error {}
+
+const READ_FAILED_MESSAGE =
+  'Fotoğraf telefondan okunamadı. Lütfen fotoğrafı yeniden çekin ya da galeriden yeniden seçin.';
+const DECODE_FAILED_MESSAGE =
+  'Fotoğraf açılamadı. Lütfen fotoğrafı yeniden çekin ya da başka bir fotoğraf seçin.';
 
 interface DecodedImage {
   source: CanvasImageSource;
@@ -40,20 +56,65 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-/** Dosyanın ilk baytları gerçekten JPEG, PNG ya da WebP mi? (uzantıya/tipe güvenilmez) */
-async function hasImageSignature(blob: Blob): Promise<boolean> {
-  const bytes = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+/** İlk baytlara göre gerçek dosya tipi: JPEG, PNG, WebP ya da (başka bir şeyse) null. */
+function sniffImageType(bytes: Uint8Array): string | null {
   const startsWith = (signature: number[], offset = 0) =>
     signature.every((byte, index) => bytes[offset + index] === byte);
-  return (
-    startsWith([0xff, 0xd8, 0xff]) || // JPEG
-    startsWith([0x89, 0x50, 0x4e, 0x47]) || // PNG
-    (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8)) // RIFF....WEBP
-  );
+  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return 'image/png';
+  if (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp'; // RIFF....WEBP
+  return null;
 }
 
-/** Dosyayı çizilebilir görüntüye çevirir (telefonun yön bilgisi uygulanmış olarak). */
-async function decodeImage(blob: Blob): Promise<DecodedImage> {
+/** Dosyanın ilk baytları gerçekten JPEG, PNG ya da WebP mi? (uzantıya/tipe güvenilmez) */
+async function hasImageSignature(blob: Blob): Promise<boolean> {
+  return sniffImageType(new Uint8Array(await blob.slice(0, 12).arrayBuffer())) !== null;
+}
+
+/**
+ * Seçilen dosyanın TAMAMINI hemen belleğe kopyalar; dosya seçilir seçilmez çağrılmalıdır.
+ *
+ * Neden: telefonda seçilen dosya, telefonun deposundaki dosyaya bağlı bir işarettir. Kamera
+ * uygulaması fotoğrafı arka planda yeniden yazınca ya da okuma izni düşünce dosya sonradan
+ * okunamaz hale gelir (Chrome: NotReadableError). Eskiden bu durumda fotoğraf "eklendi"
+ * görünüyor, önizlemesi kırık çıkıyor ve kaydetme her denemede başarısız oluyordu. Bellekteki
+ * kopya o dosyadan bağımsızdır: eklenen fotoğraf sonradan okunamaz hale gelemez.
+ *
+ * Okunamazsa PhotoPrepareError fırlatır (kullanıcı fotoğrafı yeniden çekmelidir).
+ */
+export async function readIntoMemory(file: Blob): Promise<Blob> {
+  for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt += 1) {
+    try {
+      const buffer = await withTimeout(file.arrayBuffer(), READ_TIMEOUT_MS, 'Fotoğraf zamanında okunamadı');
+      if (buffer.byteLength === 0) break; // Boş dosya: tekrar okumak düzeltmez.
+      const type = sniffImageType(new Uint8Array(buffer, 0, Math.min(12, buffer.byteLength))) ?? file.type;
+      return new Blob([buffer], { type });
+    } catch (error) {
+      console.warn(`Fotoğraf okunamadı (deneme ${attempt}/${READ_ATTEMPTS}):`, error);
+      // Süre aşımında okuma hâlâ sürüyor olabilir; üst üste yeni okuma başlatılmaz.
+      if (error instanceof Error && error.message === 'Fotoğraf zamanında okunamadı') break;
+    }
+    if (attempt < READ_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+  }
+  throw new PhotoPrepareError(READ_FAILED_MESSAGE);
+}
+
+/**
+ * Dosyayı çizilebilir görüntüye çevirir (telefonun yön bilgisi uygulanmış olarak).
+ * `reducedWidth` verilirse görüntü o genişliğe küçültülerek açılır: çok büyük fotoğrafta
+ * telefonun belleği tam boy açmaya yetmediğinde kullanılır.
+ */
+async function decodeImage(blob: Blob, reducedWidth?: number): Promise<DecodedImage> {
+  if (reducedWidth !== undefined) {
+    if (typeof createImageBitmap !== 'function') throw new Error('Küçültülerek açma desteklenmiyor');
+    const bitmap = await createImageBitmap(blob, {
+      imageOrientation: 'from-image',
+      resizeWidth: reducedWidth,
+      resizeQuality: 'high',
+    });
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+  }
+
   if (typeof createImageBitmap === 'function') {
     try {
       const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -107,23 +168,41 @@ function renderJpeg(image: DecodedImage, maxEdge: number, quality: number): Prom
   });
 }
 
+/** decodeImage + süre sınırı. Süre aşılıp görüntü sonradan açılırsa belleği bırakılır. */
+async function decodeWithTimeout(blob: Blob, reducedWidth?: number): Promise<DecodedImage> {
+  const pending = decodeImage(blob, reducedWidth);
+  try {
+    return await withTimeout(pending, DECODE_TIMEOUT_MS, 'Görüntü zamanında açılamadı');
+  } catch (error) {
+    pending.then((image) => image.release(), () => undefined);
+    throw error;
+  }
+}
+
 /**
- * Seçilen dosyayı yüklemeye hazırlar: en uzun kenarı 2000 px JPEG + 400 px önizleme.
+ * Belleğe alınmış fotoğrafı (bkz. readIntoMemory) yüklemeye hazırlar: en uzun kenarı
+ * 2000 px JPEG + 400 px önizleme.
  *
  * Küçültülmüş hali orijinalden büyük çıkarsa orijinal saklanır (zaten küçük ve iyi
- * sıkıştırılmış dosyalar). Görüntü bu cihazda açılamazsa (ör. telefonun belleği
- * yetmedi) ama gerçekten desteklenen bir görüntü dosyasıysa olduğu gibi, önizlemesiz
- * yüklenir: fotoğraf kaybedilmez. Görüntü olmayan dosya reddedilir.
+ * sıkıştırılmış dosyalar). Tam boy açılamazsa küçültülerek açmayı dener. Hiç açılamayan
+ * fotoğraf EKLENMEZ (PhotoPrepareError): önizlemesi gösterilemeyen dosya genelde yarım
+ * yazılmış ya da bozuktur ve kullanıcının bunu kaydetmeden önce, fotoğrafı yeniden
+ * çekebilecekken öğrenmesi gerekir.
  */
-export async function preparePhoto(file: Blob): Promise<PreparedPhoto> {
-  const canKeepOriginal = UPLOADABLE_TYPES.includes(file.type) && (await hasImageSignature(file));
+export async function preparePhoto(source: Blob): Promise<PreparedPhoto> {
+  const canKeepOriginal = UPLOADABLE_TYPES.includes(source.type) && (await hasImageSignature(source));
 
   let image: DecodedImage;
   try {
-    image = await withTimeout(decodeImage(file), DECODE_TIMEOUT_MS, 'Görüntü zamanında açılamadı');
+    image = await decodeWithTimeout(source);
   } catch (error) {
-    if (canKeepOriginal) return { blob: file, thumbBlob: null };
-    throw error;
+    console.warn('Fotoğraf tam boy açılamadı, küçültülerek deneniyor:', error);
+    try {
+      image = await decodeWithTimeout(source, REDUCED_DECODE_WIDTH);
+    } catch (reducedError) {
+      console.warn('Fotoğraf küçültülerek de açılamadı:', reducedError);
+      throw new PhotoPrepareError(DECODE_FAILED_MESSAGE);
+    }
   }
 
   try {
@@ -131,11 +210,11 @@ export async function preparePhoto(file: Blob): Promise<PreparedPhoto> {
       renderJpeg(image, PHOTO_MAX_EDGE, PHOTO_QUALITY),
       renderJpeg(image, THUMB_MAX_EDGE, THUMB_QUALITY),
     ]);
-    const blob = canKeepOriginal && resized.size >= file.size ? file : resized;
+    const blob = canKeepOriginal && resized.size >= source.size ? source : resized;
     return { blob, thumbBlob };
   } catch (error) {
-    if (canKeepOriginal) return { blob: file, thumbBlob: null };
-    throw error;
+    console.warn('Fotoğraf küçültülemedi:', error);
+    throw new PhotoPrepareError(DECODE_FAILED_MESSAGE);
   } finally {
     image.release();
   }

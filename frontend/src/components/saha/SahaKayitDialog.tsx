@@ -19,8 +19,10 @@ import { SahaPhoto } from '../../utils/sahaPhoto';
 import {
   MAX_PHOTOS,
   MAX_SOURCE_BYTES,
+  PhotoPrepareError,
   pendingPhoto,
   preparePhoto,
+  readIntoMemory,
   releasePendingPhoto,
   resolvePhotoIds,
 } from '../../utils/sahaPhotoUpload';
@@ -89,21 +91,37 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
     }
 
     const newPhotos: SahaPhoto[] = [];
-    const skipped: string[] = [];
+    const failures: Array<{ name: string; reason: string }> = [];
+    const failMessage = (error: unknown) =>
+      error instanceof PhotoPrepareError ? error.message : 'Fotoğraf eklenemedi. Lütfen yeniden deneyin.';
     setPreparing(true);
     try {
-      for (const file of files) {
-        if (file.size > MAX_SOURCE_BYTES) {
-          skipped.push(`${file.name} (10MB'dan büyük)`);
-          continue;
-        }
+      // Önce bütün dosyalar HEMEN belleğe alınır (bkz. readIntoMemory): telefondaki dosya
+      // sonradan okunamaz hale gelebilir; küçültme sırası beklenirse geç kalınır.
+      const sources = await Promise.all(
+        files.map(async (file) => {
+          if (file.size > MAX_SOURCE_BYTES) {
+            failures.push({ name: file.name, reason: `${Math.round(MAX_SOURCE_BYTES / 1024 / 1024)} MB'tan büyük` });
+            return null;
+          }
+          try {
+            return { file, memory: await readIntoMemory(file) };
+          } catch (error) {
+            failures.push({ name: file.name, reason: failMessage(error) });
+            return null;
+          }
+        })
+      );
+
+      for (const source of sources) {
+        if (!source) continue;
         try {
           // Orijinal dosya adını sakla — indirirken aynı isimle gelmesi için.
           // (Kamera ile çekilen fotoğraflarda tarayıcı genelde "image.jpg" gibi
           // jenerik bir ad verir; o durumda indirme adı kayıttan üretilir.)
-          newPhotos.push(pendingPhoto(await preparePhoto(file), file.name || undefined));
-        } catch {
-          skipped.push(`${file.name} (açılamadı)`);
+          newPhotos.push(pendingPhoto(await preparePhoto(source.memory), source.file.name || undefined));
+        } catch (error) {
+          failures.push({ name: source.file.name, reason: failMessage(error) });
         }
       }
     } finally {
@@ -116,8 +134,15 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
     }
     // Bildirim alanı tek mesaj gösterir: atlanan dosyalar ayrı mesajla bildirilirse
     // hemen ardından gelen "eklendi" mesajı onu siler ve kullanıcı atlananı görmez.
-    if (skipped.length > 0) {
-      showSnackbar(`${newPhotos.length} fotoğraf eklendi. Eklenemeyen: ${skipped.join(', ')}`, 'warning');
+    if (failures.length > 0 && newPhotos.length === 0 && failures.length === 1) {
+      // Tek fotoğraf (kamerayla çekim) eklenemedi: sebep ve ne yapılacağı açıkça söylenir.
+      showSnackbar(failures[0].reason, 'error');
+    } else if (failures.length > 0) {
+      const list = failures.map((f) => `${f.name || 'fotoğraf'} (${f.reason})`).join(', ');
+      showSnackbar(
+        `${newPhotos.length} fotoğraf eklendi. Eklenemeyen: ${list}`,
+        newPhotos.length > 0 ? 'warning' : 'error'
+      );
     } else if (newPhotos.length > 0) {
       showSnackbar(`${newPhotos.length} fotoğraf eklendi!`, 'success');
     }
