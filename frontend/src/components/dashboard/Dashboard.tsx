@@ -139,7 +139,10 @@ const Dashboard: React.FC = () => {
     },
   });
 
+  // İşlem listesi yalnız ofis içindir (yönetici + kullanıcı). Bayi ve saha bu ekranı
+  // görmez; sunucu da onlara 403 döner (backend routes/index.ts izin tablosu).
   useEffect(() => {
+    if (isBayi || isSaha) return;
     loadIslemler();
     loadStats();
   }, []);

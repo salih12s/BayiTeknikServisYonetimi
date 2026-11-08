@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { Islem } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
-import { getSocketUrl } from '../services/socketUrl';
+import { getSocketUrl, socketAuth } from '../services/socketUrl';
 
 export interface UseIslemSocketHandlers {
   onYeniIslem: (islem: Islem) => void;
@@ -42,6 +42,7 @@ export function useIslemSocket(handlers: UseIslemSocketHandlers): void {
       reconnectionDelay: 1000,
       reconnectionAttempts: 10,
       transports: ['websocket', 'polling'],
+      auth: socketAuth,
     });
 
     socket.on('connect', () => {

@@ -9,7 +9,6 @@ interface AuthContextType {
   bayiLogin: (username: string, password: string) => Promise<void>;
   adminLogin: (username: string, password: string) => Promise<void>;
   sahaLogin: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   loading: boolean;
@@ -49,10 +48,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(data.user);
   };
 
-  const register = async (username: string, password: string) => {
-    await authService.register(username, password);
-  };
-
   const logout = () => {
     authService.logout();
     setUser(null);
@@ -66,7 +61,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         bayiLogin,
         adminLogin,
         sahaLogin,
-        register,
         logout,
         isAuthenticated: !!user,
         loading,

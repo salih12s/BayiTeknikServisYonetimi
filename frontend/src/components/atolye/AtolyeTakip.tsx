@@ -400,11 +400,15 @@ const AtolyeTakip: React.FC = () => {
         )}
       </Paper>
 
-      <AtolyeDialog
-        open={dialogOpen}
-        onClose={handleDialogClose}
-        atolyeId={selectedAtolyeId}
-      />
+      {/* Bayi kayıt açamaz/düzenleyemez; pencere açılışta bayi, marka ve sıra numarası
+          listelerini çektiği için bayiye hiç çizilmez (sunucu bunlara 403 döner). */}
+      {!isBayi && (
+        <AtolyeDialog
+          open={dialogOpen}
+          onClose={handleDialogClose}
+          atolyeId={selectedAtolyeId}
+        />
+      )}
     </Box>
   );
 };

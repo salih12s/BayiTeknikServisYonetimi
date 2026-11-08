@@ -7,11 +7,6 @@ export const authService = {
     return response.data;
   },
 
-  register: async (username: string, password: string) => {
-    const response = await api.post('/auth/register', { username, password });
-    return response.data;
-  },
-
   login: async (username: string, password: string) => {
     const response = await api.post('/auth/login', { username, password });
     if (response.data.token) {

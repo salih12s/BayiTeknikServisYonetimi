@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { Atolye } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
-import { getSocketUrl } from '../services/socketUrl';
+import { getSocketUrl, socketAuth } from '../services/socketUrl';
 
 export interface UseAtolyeSocketHandlers {
   onYeniAtolye: (atolye: Atolye) => void;
@@ -45,6 +45,7 @@ export function useAtolyeSocket(handlers: UseAtolyeSocketHandlers): void {
       reconnectionDelay: 1000,
       reconnectionAttempts: 10,
       transports: ['websocket', 'polling'],
+      auth: socketAuth,
     });
 
     socket.on('connect', () => {

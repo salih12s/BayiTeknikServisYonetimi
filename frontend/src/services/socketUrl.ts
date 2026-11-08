@@ -16,3 +16,12 @@ export function getSocketUrl(): string {
 
   return import.meta.env.MODE === 'production' ? window.location.origin : 'http://localhost:5000';
 }
+
+/**
+ * Socket.IO bağlantısının kimlik bilgisi. Sunucu bağlanırken bilet (JWT) ister ve
+ * olayları role göre gönderir (backend services/realtime.ts). Fonksiyon olarak
+ * verilir: her (yeniden) bağlanmada o anki bilet okunur.
+ */
+export function socketAuth(cb: (data: { token: string | null }) => void): void {
+  cb({ token: localStorage.getItem('token') });
+}
