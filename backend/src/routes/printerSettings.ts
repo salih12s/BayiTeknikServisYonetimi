@@ -72,7 +72,6 @@ router.get('/:marka', authMiddleware, async (req: Request, res: Response): Promi
   try {
     const { marka } = req.params;
     const masterBrand = getMasterBrand(marka);
-    console.log('📥 Yazıcı ayarları isteniyor:', marka, '→ Master:', masterBrand);
 
     const result = await query(
       'SELECT config FROM printer_settings WHERE marka = $1',
@@ -80,11 +79,8 @@ router.get('/:marka', authMiddleware, async (req: Request, res: Response): Promi
     );
 
     if (result.rows.length > 0) {
-      const config = parseConfig(result.rows[0].config);
-      console.log('✅ Bulundu: Yazıcı ayarları yüklendi (' + (Array.isArray(config) ? config.length + ' alan' : 'config mevcut') + ')');
-      res.json(config);
+      res.json(parseConfig(result.rows[0].config));
     } else {
-      console.log('⚠️ Bulunamadı');
       res.json(null);
     }
   } catch (error) {

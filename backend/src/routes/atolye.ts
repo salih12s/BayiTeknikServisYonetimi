@@ -149,10 +149,6 @@ router.post('/', auth, async (req: Request, res: Response) => {
     if (createDto.kayit_tarihi) {
       kayitTarihi = String(createDto.kayit_tarihi).substring(0, 10);
     }
-    
-    console.log('=== BACKEND POST ===');
-    console.log('Frontend\'den gelen kayit_tarihi:', createDto.kayit_tarihi);
-    console.log('Kullanılacak kayitTarihi (sadece tarih):', kayitTarihi);
 
     const result = await query<Atolye>(
       `INSERT INTO atolye (
@@ -175,8 +171,6 @@ router.post('/', auth, async (req: Request, res: Response) => {
       ]
     );
 
-    console.log('Database\'den dönen kayit_tarihi:', result.rows[0].kayit_tarihi);
-    console.log('===================');
 
     // Tek INSERT cümlesi: kayıtların ya hepsi açılır ya hiçbiri; numaraları ardışıktır.
     const records = [...result.rows].sort((a, b) => a.id - b.id);
