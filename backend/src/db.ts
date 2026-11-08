@@ -1,6 +1,7 @@
 import mysql, { Pool, PoolOptions, PoolConnection, ResultSetHeader } from 'mysql2/promise';
 import dotenv from 'dotenv';
 import { compileQuery, parseUtcDateTime, splitUpdateReturning } from './utils/sqlParams';
+import { formatSlowQueryLog, SLOW_QUERY_MS } from './utils/diagnostics';
 
 dotenv.config();
 
@@ -166,6 +167,21 @@ async function withRetry<T>(retries: number, run: () => Promise<T>): Promise<T> 
 }
 
 /**
+ * Sorgu `SLOW_QUERY_MS`'i aşarsa tek satır yazar (bağlantı beklemesi dahil: havuz
+ * dolduğunda da görünür). Loga yer tutuculu (`$1`) HAM metin gider; değerleri
+ * yerleştirilmiş sorgu müşteri bilgisi içerir.
+ */
+async function timed<T>(text: string, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await run();
+  } finally {
+    const durationMs = Date.now() - started;
+    if (durationMs >= SLOW_QUERY_MS) console.warn(formatSlowQueryLog(text, durationMs));
+  }
+}
+
+/**
  * `$1, $2 ...` parametreli sorgu çalıştırır. SELECT ve `INSERT/DELETE ... RETURNING`
  * satırları `rows` içinde döner; `UPDATE ... RETURNING` için `updateReturning` kullanın.
  */
@@ -175,10 +191,12 @@ export async function query<T = any>(
   retries = 2,
 ): Promise<QueryResult<T>> {
   const sql = compileQuery(text, params);
-  return withRetry(retries, async () => {
-    const [raw] = await pool.query(sql);
-    return toResult<T>(raw);
-  });
+  return timed(text, () =>
+    withRetry(retries, async () => {
+      const [raw] = await pool.query(sql);
+      return toResult<T>(raw);
+    }),
+  );
 }
 
 /**
@@ -195,7 +213,7 @@ export async function updateReturning<T = any>(
   const updateSql = compileQuery(parts.update, params);
   const selectSql = compileQuery(parts.select, params);
 
-  return withRetry(retries, async () => {
+  return timed(text, () => withRetry(retries, async () => {
     const connection: PoolConnection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -209,7 +227,7 @@ export async function updateReturning<T = any>(
     } finally {
       connection.release();
     }
-  });
+  }));
 }
 
 /** Transaction içindeki sorgular; hepsi aynı bağlantıda çalışır. */
@@ -235,8 +253,10 @@ export async function transaction<T>(
     const connection: PoolConnection = await pool.getConnection();
     const tx: Transaction = {
       async query<R = any>(text: string, params?: unknown[]): Promise<QueryResult<R>> {
-        const [raw] = await connection.query(compileQuery(text, params));
-        return toResult<R>(raw);
+        return timed(text, async () => {
+          const [raw] = await connection.query(compileQuery(text, params));
+          return toResult<R>(raw);
+        });
       },
     };
     try {

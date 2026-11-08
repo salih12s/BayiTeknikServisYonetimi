@@ -23,6 +23,8 @@ import sahaRoutes from './routes/saha';
 import karalisteRoutes from './routes/karaliste';
 import bayiKayitRoutes from './routes/bayiKayit';
 import { errorHandler } from './middleware/errorHandler';
+import { requestLogger } from './middleware/requestLogger';
+import clientLogRoutes from './routes/clientLog';
 import { sweepPhotoStorageInBackground } from './services/sahaPhoto.service';
 
 dotenv.config();
@@ -79,6 +81,15 @@ app.use(cors({
   credentials: true
 }));
 
+// Teşhis: reddedilen (400+) ve yavaş (3 sn+) API isteklerini tek satırla yazar; normal
+// istekler yazılmaz. Gövde ayrıştırıcılarından ÖNCE gelir ki "gövde çok büyük" (413)
+// gibi ayrıştırma redleri de görünsün. Log ucunun kendisi yazılmaz (kendini beslemesin).
+app.use('/api', requestLogger({ skip: (url) => url.startsWith('/api/client-log') }));
+
+// Tarayıcıdan gelen sorun bildirimleri (bağlantı kopması, fotoğraf, ekran çökmesi...).
+// Kendi küçük (8 kB) ayrıştırıcısı var; genel 50 MB ayrıştırıcıdan ÖNCE gelmelidir.
+app.use('/api/client-log', clientLogRoutes);
+
 // JSON body limit - fotoğraf yüklemeleri için 50MB
 // Bayi kayıt formu herkese açıktır; gövdesi küçük tutulur ki giriş yapmamış biri sunucuya
 // büyük istekler yığamasın. Genel (50 MB) ayrıştırıcıdan ÖNCE gelmelidir.
@@ -87,16 +98,8 @@ app.use('/api/bayi-kayit/form', express.json({ limit: '20kb' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Socket.IO bağlantısı
-io.on('connection', (socket) => {
-  console.log('Yeni kullanıcı bağlandı:', socket.id);
-
-  socket.on('disconnect', () => {
-    console.log('Kullanıcı ayrıldı:', socket.id);
-  });
-});
-
-// Socket.IO'yu app'e ekle
+// Socket.IO'yu app'e ekle. (Her bağlanıp ayrılmayı yazan satırlar kaldırıldı: logu
+// dolduruyor, gerçek hataları gömüyordu.)
 app.set('io', io);
 
 // API yanıtları kişiye özeldir ve her an değişir: tarayıcı da aradaki katmanlar da
@@ -182,13 +185,14 @@ if (process.env.NODE_ENV === 'production') {
 const PORT = process.env.PORT || 5000;
 
 // Global hata yakalayıcılar - process'in çökmesini engelle
+// Hatanın kodda nerede çıktığı (stack) da yazılır; yalnız mesaj teşhis için yetmiyordu.
 process.on('unhandledRejection', (reason) => {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  console.error('⚠️ Yakalanmamış promise reddi:', message);
+  const detail = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  console.error('⚠️ Yakalanmamış promise reddi:', detail);
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('⚠️ Yakalanmamış istisna:', err.message);
+  console.error('⚠️ Yakalanmamış istisna:', err.stack || err.message);
 });
 
 // Açılışta şema değişikliği YAPILMAZ: tablolar migrations/mysql altındaki SQL ile
