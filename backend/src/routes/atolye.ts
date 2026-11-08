@@ -162,7 +162,8 @@ router.post('/', auth, async (req: Request, res: Response) => {
       [
         createDto.bayi_adi || null,
         createDto.musteri_ad_soyad || null,
-        createDto.tel_no || null,
+        // Telefon formda isteğe bağlıdır ama kolon NOT NULL: boşsa NULL değil boş metin.
+        createDto.tel_no || '',
         createDto.marka || null,
         createDto.kod || null,
         createDto.seri_no || null,

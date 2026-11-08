@@ -95,6 +95,20 @@ describe('atölye kaydı açma (API + MariaDB)', options, () => {
     }
   });
 
+  // Regresyon (canlı log, 2026-10-17 ... 2026-11-05, 34 kez): telefon formda isteğe
+  // bağlıdır ama kolon NOT NULL; boş telefon NULL'a çevrilince kayıt 500 veriyordu.
+  it('telefon boş bırakılırsa (boş metin ya da hiç gönderilmemiş) kayıt yine açılır', async () => {
+    const bosMetin = await create({ ...kayit, tel_no: '' });
+    assert.equal(bosMetin.status, 201, JSON.stringify(bosMetin.body));
+    assert.equal(bosMetin.body.tel_no, '');
+
+    const { tel_no: _telNo, ...telefonsuz } = kayit;
+    const hicYok = await create({ ...telefonsuz, adet: 2 });
+    assert.equal(hicYok.status, 201, JSON.stringify(hicYok.body));
+    assert.equal(hicYok.body.tel_no, '');
+    assert.equal((await rows()).length, 3);
+  });
+
   it('geçersiz adet 400 döner ve hiç kayıt açılmaz', async () => {
     for (const adet of [0, -3, 101, 2.5, 'otuz', [3]]) {
       const created = await create({ ...kayit, adet });
