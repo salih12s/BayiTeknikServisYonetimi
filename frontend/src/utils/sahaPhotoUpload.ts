@@ -5,6 +5,7 @@
  * doğrudan yüklenir, kayıt kaydedilirken yalnızca fotoğrafın numarası gönderilir.
  */
 import { api } from '../services/api';
+import { reportClientEvent } from '../services/clientLog';
 import { PreparedPhoto, SahaPhoto, dataUrlToBlob } from './sahaPhoto';
 
 /** Fotoğrafın en uzun kenarı (piksel) ve JPEG kalitesi. */
@@ -31,8 +32,22 @@ const REDUCED_DECODE_WIDTH = 1500;
 const UPLOAD_TIMEOUT_MS = 120000;
 const UPLOAD_ATTEMPTS = 3;
 
-/** Fotoğraf eklenemedi; `message` kullanıcıya olduğu gibi gösterilir. */
-export class PhotoPrepareError extends Error {}
+/**
+ * Fotoğraf eklenemedi; `message` kullanıcıya olduğu gibi gösterilir. `code` ve `detail`
+ * teşhis içindir (sunucu loguna gider): ör. `okunamadi` / `NotReadableError`.
+ */
+export class PhotoPrepareError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'okunamadi' | 'acilamadi',
+    readonly detail?: string,
+  ) {
+    super(message);
+  }
+}
+
+const errorName = (error: unknown): string | undefined =>
+  error instanceof Error ? `${error.name}: ${error.message}` : error === undefined ? undefined : String(error);
 
 const READ_FAILED_MESSAGE =
   'Fotoğraf telefondan okunamadı. Lütfen fotoğrafı yeniden çekin ya da galeriden yeniden seçin.';
@@ -83,20 +98,25 @@ async function hasImageSignature(blob: Blob): Promise<boolean> {
  * Okunamazsa PhotoPrepareError fırlatır (kullanıcı fotoğrafı yeniden çekmelidir).
  */
 export async function readIntoMemory(file: Blob): Promise<Blob> {
+  let lastError: string | undefined;
   for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt += 1) {
     try {
       const buffer = await withTimeout(file.arrayBuffer(), READ_TIMEOUT_MS, 'Fotoğraf zamanında okunamadı');
-      if (buffer.byteLength === 0) break; // Boş dosya: tekrar okumak düzeltmez.
+      if (buffer.byteLength === 0) {
+        lastError = 'boş dosya (0 bayt)';
+        break; // Boş dosya: tekrar okumak düzeltmez.
+      }
       const type = sniffImageType(new Uint8Array(buffer, 0, Math.min(12, buffer.byteLength))) ?? file.type;
       return new Blob([buffer], { type });
     } catch (error) {
+      lastError = `${errorName(error)} (deneme ${attempt})`;
       console.warn(`Fotoğraf okunamadı (deneme ${attempt}/${READ_ATTEMPTS}):`, error);
       // Süre aşımında okuma hâlâ sürüyor olabilir; üst üste yeni okuma başlatılmaz.
       if (error instanceof Error && error.message === 'Fotoğraf zamanında okunamadı') break;
     }
     if (attempt < READ_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
   }
-  throw new PhotoPrepareError(READ_FAILED_MESSAGE);
+  throw new PhotoPrepareError(READ_FAILED_MESSAGE, 'okunamadi', lastError);
 }
 
 /**
@@ -201,7 +221,7 @@ export async function preparePhoto(source: Blob): Promise<PreparedPhoto> {
       image = await decodeWithTimeout(source, REDUCED_DECODE_WIDTH);
     } catch (reducedError) {
       console.warn('Fotoğraf küçültülerek de açılamadı:', reducedError);
-      throw new PhotoPrepareError(DECODE_FAILED_MESSAGE);
+      throw new PhotoPrepareError(DECODE_FAILED_MESSAGE, 'acilamadi', `${errorName(error)} / küçültülerek: ${errorName(reducedError)}`);
     }
   }
 
@@ -214,7 +234,7 @@ export async function preparePhoto(source: Blob): Promise<PreparedPhoto> {
     return { blob, thumbBlob };
   } catch (error) {
     console.warn('Fotoğraf küçültülemedi:', error);
-    throw new PhotoPrepareError(DECODE_FAILED_MESSAGE);
+    throw new PhotoPrepareError(DECODE_FAILED_MESSAGE, 'acilamadi', `küçültme: ${errorName(error)}`);
   } finally {
     image.release();
   }
@@ -237,7 +257,11 @@ export function releasePendingPhoto(photo: SahaPhoto): void {
 /** Dosyayı imzalı adrese yükler; ağ hatasında birkaç kez yeniden dener. */
 async function putToStorage(uploadUrl: string, blob: Blob): Promise<void> {
   let lastError: unknown;
+  let lastStatus: number | undefined;
+  let attempts = 0;
+  const started = performance.now();
   for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt += 1) {
+    attempts = attempt;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
     try {
@@ -252,6 +276,7 @@ async function putToStorage(uploadUrl: string, blob: Blob): Promise<void> {
       // olarak kapatır.
       await response.arrayBuffer().catch(() => undefined);
       if (response.ok) return;
+      lastStatus = response.status;
       lastError = new Error(`Depo yüklemeyi reddetti (${response.status})`);
       // İmza/izin hatası tekrar denemekle düzelmez.
       if (response.status >= 400 && response.status < 500) break;
@@ -262,6 +287,16 @@ async function putToStorage(uploadUrl: string, blob: Blob): Promise<void> {
     }
     if (attempt < UPLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
   }
+  // Teşhis: depoya yükleme sunucudan geçmez; sunucu bu hatayı hiç görmez.
+  reportClientEvent({
+    tur: 'r2',
+    durum: lastStatus,
+    kod: errorName(lastError),
+    boyut: blob.size,
+    dosyaTipi: blob.type,
+    deneme: attempts,
+    ms: Math.round(performance.now() - started),
+  });
   throw lastError;
 }
 

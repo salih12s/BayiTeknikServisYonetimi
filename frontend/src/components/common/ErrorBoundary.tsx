@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Button, Typography, Paper } from '@mui/material';
+import { reportClientEvent } from '../../services/clientLog';
 
 /**
  * Uygulama seviyesi ErrorBoundary (Part 3 / P3.G4).
@@ -27,11 +28,15 @@ class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Üretim ortamında merkezi bir log servisine gönderilebilir.
-    // Şimdilik konsola yazıyoruz — debug log temizliği kapsamında
-    // bilinçli olarak korunmuş tek frontend console.error grubu.
     // eslint-disable-next-line no-console
     console.error('[ErrorBoundary] Yakalandı:', error, errorInfo);
+    // Teşhis: beyaz ekran yalnızca kullanıcının tarayıcısında kalmasın, sunucu loguna gitsin.
+    const isChunkError = /dynamically imported module|Loading chunk|Importing a module script failed/i.test(error.message);
+    reportClientEvent({
+      tur: isChunkError ? 'parca' : 'cokme',
+      mesaj: error.message,
+      ayrinti: (errorInfo.componentStack ?? error.stack ?? '').replace(/\s+/g, ' ').trim(),
+    });
   }
 
   handleReload = () => {

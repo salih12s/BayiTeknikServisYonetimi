@@ -1,4 +1,5 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { lastApiProtocol, reportClientEvent } from './clientLog';
 
 // Environment variable'dan API URL'i al
 // Development: http://localhost:5000/api
@@ -29,7 +30,23 @@ declare module 'axios' {
 
 type RetryableAxiosConfig = InternalAxiosRequestConfig & {
   _retryCount?: number;
+  /** İlk denemenin başladığı an (tekrar denemelerde değişmez: toplam süre ölçülür). */
+  _startedAt?: number;
 };
+
+/** Bu süreyi aşan (ama cevaplanan) istek "yavaş" diye bildirilir. */
+const SLOW_API_MS = 8000;
+
+function describeRequest(config: RetryableAxiosConfig | undefined) {
+  const started = config?._startedAt;
+  return {
+    uc: `${config?.baseURL ?? ''}${config?.url ?? ''}`,
+    yontem: config?.method?.toUpperCase(),
+    ms: typeof started === 'number' ? Math.round(performance.now() - started) : undefined,
+    deneme: (config?._retryCount || 0) + 1,
+    protokol: lastApiProtocol(),
+  };
+}
 
 const RETRYABLE_GET_STATUS_CODES = new Set([500, 502, 503, 504]);
 
@@ -58,6 +75,8 @@ function shouldRetryRequest(error: AxiosError): boolean {
 
 // Token'ı her istekte ekle
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const retryable = config as RetryableAxiosConfig;
+  if (retryable._startedAt === undefined) retryable._startedAt = performance.now();
   const token = localStorage.getItem('token');
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -67,7 +86,17 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 // Hata yönetimi
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Teşhis: yavaş cevap ya da ancak tekrar denemeyle gelen cevap (bağlantı aksadı).
+    const config = response.config as RetryableAxiosConfig;
+    const info = describeRequest(config);
+    if ((config._retryCount || 0) > 0) {
+      reportClientEvent({ tur: 'api-ag', ...info, durum: response.status, ayrinti: 'tekrar denemeyle düzeldi' });
+    } else if ((info.ms ?? 0) >= SLOW_API_MS) {
+      reportClientEvent({ tur: 'api-yavas', ...info, durum: response.status });
+    }
+    return response;
+  },
   async (error: AxiosError) => {
     if (error.response?.status === 401) {
       // Token geçersiz, kullanıcıyı çıkış yap
@@ -81,6 +110,12 @@ api.interceptors.response.use(
       config._retryCount = (config._retryCount || 0) + 1;
       await sleep(500 * config._retryCount);
       return api(config);
+    }
+
+    // Teşhis: sunucudan HİÇ cevap gelmedi (bağlantı koptu, zaman aşımı, takılma). Bu
+    // istekler sunucu logunda görünmez; tek iz burası. (Cevap gelen 4xx/5xx'i sunucu yazar.)
+    if (!error.response && error.code !== 'ERR_CANCELED') {
+      reportClientEvent({ tur: 'api-ag', ...describeRequest(error.config as RetryableAxiosConfig), kod: error.code });
     }
 
     return Promise.reject(error);

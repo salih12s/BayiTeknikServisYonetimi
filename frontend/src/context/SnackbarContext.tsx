@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import { Snackbar, Alert, AlertColor } from '@mui/material';
+import { reportClientEvent } from '../services/clientLog';
 
 interface SnackbarContextType {
   showSnackbar: (message: string, severity?: AlertColor) => void;
@@ -14,6 +15,9 @@ export const SnackbarProvider: React.FC<{ children: ReactNode }> = ({ children }
 
   // Stable identity so hook deps (useAtolyeSocket vb.) don't re-mount on every render.
   const showSnackbar = useCallback((msg: string, sev: AlertColor = 'info') => {
+    // Teşhis: kullanıcının gördüğü her kırmızı hata mesajı sunucu loguna da gider
+    // (uygulamadaki ~66 hata mesajının hepsi buradan geçer).
+    if (sev === 'error') reportClientEvent({ tur: 'mesaj', mesaj: msg });
     setMessage(msg);
     setSeverity(sev);
     setOpen(true);

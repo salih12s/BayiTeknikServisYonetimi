@@ -16,6 +16,7 @@ import { sahaService } from '../../services/saha.service';
 import { SahaKayit, SahaKayitCreateDto } from '../../types';
 import { useSnackbar } from '../../context/SnackbarContext';
 import { SahaPhoto } from '../../utils/sahaPhoto';
+import { reportClientEvent } from '../../services/clientLog';
 import {
   MAX_PHOTOS,
   MAX_SOURCE_BYTES,
@@ -92,8 +93,20 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
 
     const newPhotos: SahaPhoto[] = [];
     const failures: Array<{ name: string; reason: string }> = [];
-    const failMessage = (error: unknown) =>
-      error instanceof PhotoPrepareError ? error.message : 'Fotoğraf eklenemedi. Lütfen yeniden deneyin.';
+    // Teşhis: eklenemeyen her fotoğraf sebebiyle sunucu loguna gider (fotoğrafın kendisi gitmez).
+    const failMessage = (error: unknown, file: File) => {
+      reportClientEvent(
+        {
+          tur: 'foto',
+          kod: error instanceof PhotoPrepareError ? error.code : 'beklenmeyen',
+          ayrinti: error instanceof PhotoPrepareError ? error.detail : error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+          boyut: file.size,
+          dosyaTipi: file.type || 'bilinmiyor',
+        },
+        `foto|${file.name}|${file.size}`,
+      );
+      return error instanceof PhotoPrepareError ? error.message : 'Fotoğraf eklenemedi. Lütfen yeniden deneyin.';
+    };
     setPreparing(true);
     try {
       // Önce bütün dosyalar HEMEN belleğe alınır (bkz. readIntoMemory): telefondaki dosya
@@ -101,13 +114,14 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
       const sources = await Promise.all(
         files.map(async (file) => {
           if (file.size > MAX_SOURCE_BYTES) {
+            reportClientEvent({ tur: 'foto', kod: 'buyuk', boyut: file.size, dosyaTipi: file.type || 'bilinmiyor' }, `foto|${file.name}|${file.size}`);
             failures.push({ name: file.name, reason: `${Math.round(MAX_SOURCE_BYTES / 1024 / 1024)} MB'tan büyük` });
             return null;
           }
           try {
             return { file, memory: await readIntoMemory(file) };
           } catch (error) {
-            failures.push({ name: file.name, reason: failMessage(error) });
+            failures.push({ name: file.name, reason: failMessage(error, file) });
             return null;
           }
         })
@@ -121,7 +135,7 @@ const SahaKayitDialog: React.FC<Props> = ({ open, editingKayit, initialPhotos, o
           // jenerik bir ad verir; o durumda indirme adı kayıttan üretilir.)
           newPhotos.push(pendingPhoto(await preparePhoto(source.memory), source.file.name || undefined));
         } catch (error) {
-          failures.push({ name: source.file.name, reason: failMessage(error) });
+          failures.push({ name: source.file.name, reason: failMessage(error, source.file) });
         }
       }
     } finally {
