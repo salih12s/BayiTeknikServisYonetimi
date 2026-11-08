@@ -40,18 +40,27 @@ async function computeStats(): Promise<any> {
       COUNT(CASE WHEN is_durumu = 'tamamlandi' THEN 1 END) as tamamlandi,
       COUNT(CASE WHEN is_durumu = 'iptal' THEN 1 END) as iptal,
       COUNT(CASE WHEN full_tarih >= CURRENT_DATE AND full_tarih < CURRENT_DATE + INTERVAL 1 DAY THEN 1 END) as bugun,
-      COUNT(CASE WHEN (yazdirildi IS NULL OR yazdirildi = false) THEN 1 END) as yazdirilmamis
+      COUNT(CASE WHEN (yazdirildi IS NULL OR yazdirildi = false) THEN 1 END) as yazdirilmamis,
+      COALESCE(SUM(tutar), 0) as toplam_tutar
     FROM islemler
   `);
-  return result.rows[0];
+  // DECIMAL toplamı sürücüden metin gelir ("6660149.05"); istemciye sayı gider.
+  return { ...result.rows[0], toplam_tutar: Number(result.rows[0].toplam_tutar) };
+}
+
+/** Toplam tutar (ciro) yalnızca yöneticiye gönderilir; diğer roller yalnızca sayıları görür. */
+function statsForRole(data: any, role: string | undefined): any {
+  if (role === 'admin') return data;
+  const { toplam_tutar: _hidden, ...counts } = data;
+  return counts;
 }
 // === END STATS CACHE ===
 
 // İstatistikler endpoint - hafif, sadece sayılar döner
-router.get('/stats', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
+router.get('/stats', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
     if (statsCache && Date.now() - statsCache.timestamp < STATS_CACHE_TTL) {
-      res.json(statsCache.data);
+      res.json(statsForRole(statsCache.data, req.user?.role));
       return;
     }
 
@@ -72,7 +81,7 @@ router.get('/stats', authMiddleware, async (_req: Request, res: Response): Promi
         });
     }
 
-    res.json(await statsInFlight);
+    res.json(statsForRole(await statsInFlight, req.user?.role));
   } catch (error) {
     logger.error('İstatistik hatası:', error);
     res.status(500).json({ message: 'Sunucu hatası' });

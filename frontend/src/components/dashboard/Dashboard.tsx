@@ -457,12 +457,9 @@ const Dashboard: React.FC = () => {
   // ⚡ PERFORMANS: İşlem istatistiklerini sunucudan al
   const stats = useMemo(() => {
     if (serverStats) {
-      const toplamTutar = isAdmin
-        ? islemler.reduce((sum, i) => {
-            const tutar = typeof i.tutar === 'number' ? i.tutar : parseFloat(String(i.tutar || 0));
-            return sum + (isNaN(tutar) ? 0 : tutar);
-          }, 0)
-        : 0;
+      // Bütün işlemlerin toplamı sunucuda hesaplanır (yalnızca yöneticiye gönderilir).
+      // Eskiden yalnızca ekranda yüklü satırlar (en yeni 100 kayıt) toplanıyordu.
+      const toplamTutar = isAdmin ? Number(serverStats.toplam_tutar) || 0 : 0;
 
       return {
         acikCount: parseInt(serverStats.acik) || 0,
@@ -485,7 +482,7 @@ const Dashboard: React.FC = () => {
       yazdirilmamisCount: 0,
       toplamTutar: 0,
     };
-  }, [serverStats, islemler, isAdmin]);
+  }, [serverStats, isAdmin]);
 
   return (
     <Box sx={{ flexGrow: 1 }}>
