@@ -16,6 +16,17 @@ const api = axios.create({
   },
 });
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * Yazma isteği sunucudan HİÇ cevap alamadıysa (bağlantı koptu, zaman aşımı) yeniden
+     * gönderilsin. Yalnızca iki kez gönderilmesi zararsız isteklerde (aynı değeri yazan
+     * PUT/PATCH) açılır; "çevir" (toggle) ya da yeni kayıt açan isteklerde AÇILMAZ.
+     */
+    retryOnNetworkError?: boolean;
+  }
+}
+
 type RetryableAxiosConfig = InternalAxiosRequestConfig & {
   _retryCount?: number;
 };
@@ -26,14 +37,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function shouldRetryGetRequest(error: AxiosError): boolean {
+function shouldRetryRequest(error: AxiosError): boolean {
   const config = error.config as RetryableAxiosConfig | undefined;
   const method = config?.method?.toLowerCase();
   const status = error.response?.status;
   const retryCount = config?._retryCount || 0;
 
-  if (!config || method !== 'get' || retryCount >= 2) {
+  if (!config || retryCount >= 2) {
     return false;
+  }
+
+  // Yazma isteği: yalnızca açıkça izin verildiyse ve sunucudan hiç cevap gelmediyse.
+  // (Cevap geldiyse — 4xx/5xx — sunucu isteği gördü; tekrar göndermek düzeltmez.)
+  if (method !== 'get') {
+    return config.retryOnNetworkError === true && !error.response;
   }
 
   return !status || RETRYABLE_GET_STATUS_CODES.has(status) || error.code === 'ECONNABORTED';
@@ -59,7 +76,7 @@ api.interceptors.response.use(
       window.location.href = '/login';
     }
 
-    if (shouldRetryGetRequest(error)) {
+    if (shouldRetryRequest(error)) {
       const config = error.config as RetryableAxiosConfig;
       config._retryCount = (config._retryCount || 0) + 1;
       await sleep(500 * config._retryCount);

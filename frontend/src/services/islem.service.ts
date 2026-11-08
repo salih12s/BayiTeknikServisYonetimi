@@ -37,7 +37,8 @@ export const islemService = {
   },
 
   update: async (id: number, data: IslemUpdateDto): Promise<Islem> => {
-    const response = await api.put(`/islemler/${id}`, data);
+    // Aynı değerleri yazar: bağlantı koparsa yeniden göndermek güvenlidir.
+    const response = await api.put(`/islemler/${id}`, data, { retryOnNetworkError: true });
     return response.data;
   },
 
@@ -48,12 +49,13 @@ export const islemService = {
   // ⚡ Sadece "yazdirildi" bayrağını çevirir. Tüm satırı PUT etmek yerine
   // tek kolonluk PATCH — sunucuda ön SELECT yok, 20 kolon yazımı yok.
   toggleYazdirildi: async (id: number, yazdirildi: boolean): Promise<Islem> => {
-    const response = await api.patch(`/islemler/${id}/yazdirildi`, { yazdirildi });
+    // Değeri açıkça yazar (sunucuda tersine çevirme yok): yeniden göndermek güvenlidir.
+    const response = await api.patch(`/islemler/${id}/yazdirildi`, { yazdirildi }, { retryOnNetworkError: true });
     return response.data;
   },
 
   updateDurum: async (id: number, is_durumu: 'acik' | 'tamamlandi'): Promise<Islem> => {
-    const response = await api.patch(`/islemler/${id}/durum`, { is_durumu });
+    const response = await api.patch(`/islemler/${id}/durum`, { is_durumu }, { retryOnNetworkError: true });
     return response.data;
   },
 };

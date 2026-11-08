@@ -46,7 +46,8 @@ export const atolyeService = {
 
   // Kayıt güncelle
   update: async (id: number, data: AtolyeUpdateDto): Promise<Atolye> => {
-    const response = await api.put<Atolye>(`/atolye/${id}`, data);
+    // Aynı değerleri yazar: bağlantı koparsa yeniden göndermek güvenlidir.
+    const response = await api.put<Atolye>(`/atolye/${id}`, data, { retryOnNetworkError: true });
     return response.data;
   },
 
