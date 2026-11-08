@@ -1,6 +1,7 @@
 ﻿import express, { Request, Response } from 'express';
 import { query, updateReturning } from '../db';
 import authMiddleware from '../middleware/auth';
+import { emitIslemEvent } from '../services/realtime';
 import logger from '../utils/logger';
 import { IslemCreateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
@@ -377,7 +378,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
 
     // Socket.IO ile tüm kullanıcılara bildir
     const io = req.app.get('io');
-    io.emit(SOCKET_EVENTS.YENI_ISLEM, result.rows[0]);
+    emitIslemEvent(io, SOCKET_EVENTS.YENI_ISLEM, result.rows[0]);
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -455,7 +456,7 @@ router.put('/:id', authMiddleware, async (req: Request, res: Response): Promise<
 
     // Socket.IO ile tüm kullanıcılara bildir
     const io = req.app.get('io');
-    io.emit(SOCKET_EVENTS.ISLEM_GUNCELLENDI, result.rows[0]);
+    emitIslemEvent(io, SOCKET_EVENTS.ISLEM_GUNCELLENDI, result.rows[0]);
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -486,7 +487,7 @@ router.patch('/:id/yazdirildi', authMiddleware, async (req: Request, res: Respon
     invalidateStatsCache();
 
     const io = req.app.get('io');
-    io.emit(SOCKET_EVENTS.ISLEM_GUNCELLENDI, result.rows[0]);
+    emitIslemEvent(io, SOCKET_EVENTS.ISLEM_GUNCELLENDI, result.rows[0]);
 
     res.json(result.rows[0]);
   } catch (error) {
@@ -515,7 +516,7 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promi
 
     // Socket.IO ile tüm kullanıcılara bildir
     const io = req.app.get('io');
-    io.emit(SOCKET_EVENTS.ISLEM_SILINDI, id);
+    emitIslemEvent(io, SOCKET_EVENTS.ISLEM_SILINDI, id);
 
     res.json({ message: 'İşlem silindi', islem: result.rows[0] });
   } catch (error) {
@@ -549,7 +550,7 @@ router.patch('/:id/durum', authMiddleware, async (req: Request, res: Response): 
 
     // Socket.IO ile tüm kullanıcılara bildir
     const io = req.app.get('io');
-    io.emit(SOCKET_EVENTS.ISLEM_DURUM_DEGISTI, result.rows[0]);
+    emitIslemEvent(io, SOCKET_EVENTS.ISLEM_DURUM_DEGISTI, result.rows[0]);
 
     res.json(result.rows[0]);
   } catch (error) {

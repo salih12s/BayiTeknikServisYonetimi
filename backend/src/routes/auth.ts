@@ -3,43 +3,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db';
 import logger from '../utils/logger';
+import { verifyBayiPassword } from '../services/bayiPasswords';
 
 const router = express.Router();
 
-// Kayıt
-router.post('/register', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { username, password } = req.body;
-
-    // Kullanıcı var mı kontrol et
-    const userCheck = await query(
-      'SELECT * FROM users WHERE username = $1',
-      [username]
-    );
-
-    if (userCheck.rows.length > 0) {
-      res.status(400).json({ message: 'Bu kullanıcı adı zaten kullanılıyor' });
-      return;
-    }
-
-    // Şifreyi hashle
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Kullanıcıyı kaydet
-    const newUser = await query(
-      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
-      [username, hashedPassword]
-    );
-
-    res.status(201).json({
-      message: 'Kullanıcı başarıyla oluşturuldu',
-      user: newUser.rows[0]
-    });
-  } catch (error) {
-    logger.error('Kayıt hatası:', error);
-    res.status(500).json({ message: 'Sunucu hatası' });
-  }
-});
+// Not: Herkese açık "kayıt ol" (/register) ucu 2026-11-08'de KALDIRILDI. İnternetteki
+// herkesin hesap açıp bütün müşteri verisine ulaşmasına izin veriyordu; arayüz de
+// kullanmıyordu. Kullanıcıyı yalnızca yönetici açar: POST /api/admin/create-user.
 
 // Giriş
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
@@ -62,6 +32,12 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 
     if (!validPassword) {
       res.status(401).json({ message: 'Kullanıcı adı veya şifre hatalı' });
+      return;
+    }
+
+    // Yöneticinin pasif yaptığı hesap giriş yapamaz (eskiden bu kontrol yoktu).
+    if (user.rows[0].is_active === false) {
+      res.status(403).json({ message: 'Hesabınız pasif. Yöneticinize başvurun.' });
       return;
     }
 
@@ -103,10 +79,14 @@ router.post('/bayi-login', async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    // Şifreyi kontrol et (plaintext karşılaştırma - basit sistem için)
-    if (password !== bayi.rows[0].password) {
+    // Şifre bcrypt ile saklanır. Eski (düz metin) kayıt eşleşirse hemen şifrelenir.
+    const check = await verifyBayiPassword(password, bayi.rows[0].password);
+    if (!check.ok) {
       res.status(401).json({ message: 'Kullanıcı adı veya şifre hatalı' });
       return;
+    }
+    if (check.upgrade) {
+      await query('UPDATE bayiler SET password = $1 WHERE id = $2', [check.upgrade, bayi.rows[0].id]);
     }
 
     // Token oluştur
@@ -143,8 +123,14 @@ router.post('/verify-system-password', async (req: Request, res: Response): Prom
     // SYSTEM_PASSWORD_HASH_B64 ile verilir.
     const SYSTEM_PASSWORD_HASH = process.env.SYSTEM_PASSWORD_HASH_B64
       ? Buffer.from(process.env.SYSTEM_PASSWORD_HASH_B64, 'base64').toString('utf8')
-      : process.env.SYSTEM_PASSWORD_HASH || '$2a$10$XQKZvK5P7pZQwVxJYvN8/.rKZvQK5pGxGvB0YvN8vL5K7pZQwVxJY'; // TakipSistemi!123
-    
+      : process.env.SYSTEM_PASSWORD_HASH ||
+        // Yalnız yerel geliştirme için yedek değer; yayında ortam değişkeni ZORUNLU.
+        (process.env.NODE_ENV === 'production' ? '' : '$2a$10$XQKZvK5P7pZQwVxJYvN8/.rKZvQK5pGxGvB0YvN8vL5K7pZQwVxJY');
+    if (!SYSTEM_PASSWORD_HASH) {
+      res.status(503).json({ message: 'Sistem şifresi tanımlı değil' });
+      return;
+    }
+
     // Şifreyi kontrol et
     const isValid = await bcrypt.compare(password, SYSTEM_PASSWORD_HASH);
     

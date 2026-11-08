@@ -4,6 +4,7 @@ import { toSqlTimestamp } from '../utils/sqlParams';
 import auth from '../middleware/auth';
 import { Atolye, AtolyeCreateDto, AtolyeUpdateDto } from '../types';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
+import { emitAtolyeEvent } from '../services/realtime';
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
 import { MAX_ATOLYE_ADET, parseAdet } from '../utils/atolyeRules';
@@ -35,6 +36,18 @@ function invalidateCache() {
 }
 // === END CACHE ===
 
+/**
+ * Bayi yalnızca KENDİ kayıtlarını görür (eskiden bütün bayilerin kayıtları sunucudan
+ * geliyor, süzme yalnızca ekranda yapılıyordu). Bayi için `bayi_adi = <biletteki bayi adı>`
+ * koşulu döner; diğer roller için koşul yoktur. Ekrandaki süzmeyle aynı (harfi harfine)
+ * karşılaştırmadır.
+ */
+function bayiScope(req: Request, paramIndex: number): { where: string; params: unknown[] } {
+  if (req.user?.role !== 'bayi') return { where: '', params: [] };
+  return { where: `WHERE bayi_adi = $${paramIndex}`, params: [req.user.bayiIsim ?? '\u0000'] };
+}
+const isBayi = (req: Request) => req.user?.role === 'bayi';
+
 // GET atolye records with pagination
 router.get('/', auth, async (req: Request, res: Response) => {
   try {
@@ -44,19 +57,23 @@ router.get('/', auth, async (req: Request, res: Response) => {
     const noPagination = req.query.all === 'true';
 
     if (noPagination) {
+      const scope = bayiScope(req, 1);
       const result = await query<Atolye>(
-        'SELECT * FROM atolye ORDER BY created_at DESC'
+        `SELECT * FROM atolye ${scope.where} ORDER BY created_at DESC`,
+        scope.params
       );
       return res.json(result.rows);
     }
 
-    const countResult = await query('SELECT COUNT(*) AS count FROM atolye');
+    const countScope = bayiScope(req, 1);
+    const countResult = await query(`SELECT COUNT(*) AS count FROM atolye ${countScope.where}`, countScope.params);
     const totalCount = parseInt(countResult.rows[0].count);
     const totalPages = Math.ceil(totalCount / limit);
 
+    const scope = bayiScope(req, 3);
     const result = await query<Atolye>(
-      'SELECT * FROM atolye ORDER BY id DESC LIMIT $1 OFFSET $2',
-      [limit, offset]
+      `SELECT * FROM atolye ${scope.where} ORDER BY id DESC LIMIT $1 OFFSET $2`,
+      [limit, offset, ...scope.params]
     );
 
     return res.json({
@@ -70,8 +87,10 @@ router.get('/', auth, async (req: Request, res: Response) => {
 });
 
 // GET next available ID - CACHED
-router.get('/next-id', auth, async (_req: Request, res: Response) => {
+router.get('/next-id', auth, async (req: Request, res: Response) => {
   try {
+    // Sıra numarası yalnızca yeni kayıt açan ofis içindir; bayi kayıt açmaz.
+    if (isBayi(req)) return res.status(403).json({ message: 'Bu işlem için yetkiniz yok' });
     if (isCacheValid(cache.nextId)) {
       return res.json({ nextId: cache.nextId!.data });
     }
@@ -87,13 +106,15 @@ router.get('/next-id', auth, async (_req: Request, res: Response) => {
 });
 
 // GET status counts - CACHED
-router.get('/status-counts', auth, async (_req: Request, res: Response) => {
+router.get('/status-counts', auth, async (req: Request, res: Response) => {
   try {
-    if (isCacheValid(cache.statusCounts)) {
+    // Önbellek yalnızca bütün kayıtların sayıları içindir; bayinin sayıları ayrı hesaplanır.
+    if (!isBayi(req) && isCacheValid(cache.statusCounts)) {
       return res.json(cache.statusCounts!.data);
     }
+    const scope = bayiScope(req, 1);
     const result = await query(`
-      SELECT 
+      SELECT
         COUNT(*) as total,
         COUNT(CASE WHEN teslim_durumu = 'beklemede' THEN 1 END) as beklemede,
         COUNT(CASE WHEN teslim_durumu = 'teslim_edildi' THEN 1 END) as teslim_edildi,
@@ -101,9 +122,9 @@ router.get('/status-counts', auth, async (_req: Request, res: Response) => {
         COUNT(CASE WHEN teslim_durumu = 'yapildi' THEN 1 END) as yapildi,
         COUNT(CASE WHEN teslim_durumu = 'fabrika_gitti' THEN 1 END) as fabrika_gitti,
         COUNT(CASE WHEN teslim_durumu = 'odeme_bekliyor' THEN 1 END) as odeme_bekliyor
-      FROM atolye
-    `);
-    cache.statusCounts = { data: result.rows[0], timestamp: Date.now() };
+      FROM atolye ${scope.where}
+    `, scope.params);
+    if (!isBayi(req)) cache.statusCounts = { data: result.rows[0], timestamp: Date.now() };
     return res.json(result.rows[0]);
   } catch (error) {
     logger.error('Error getting status counts:', error);
@@ -120,7 +141,8 @@ router.get('/:id', auth, async (req: Request, res: Response) => {
       [id]
     );
 
-    if (result.rows.length === 0) {
+    // Bayiye başka bayinin kaydı "yok" (404) olarak görünür: varlığı da sızmasın.
+    if (result.rows.length === 0 || (isBayi(req) && result.rows[0].bayi_adi !== req.user?.bayiIsim)) {
       return res.status(404).json({ error: 'Kayıt bulunamadı' });
     }
 
@@ -182,7 +204,7 @@ router.post('/', auth, async (req: Request, res: Response) => {
     // Socket.IO ile tüm bağlı kullanıcılara bildir
     const io = req.app.get('io');
     if (io) {
-      for (const record of records) io.emit(SOCKET_EVENTS.YENI_ATOLYE, record);
+      for (const record of records) emitAtolyeEvent(io, SOCKET_EVENTS.YENI_ATOLYE, record, record.bayi_adi);
     }
 
     // Tek kayıtta yanıt eskisiyle aynıdır; çoklu girişte açılan kayıt sayısı eklenir.
@@ -292,7 +314,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
     // Socket.IO ile tüm bağlı kullanıcılara bildir
     const io = req.app.get('io');
     if (io) {
-      io.emit(SOCKET_EVENTS.ATOLYE_GUNCELLENDI, updatedRecord);
+      emitAtolyeEvent(io, SOCKET_EVENTS.ATOLYE_GUNCELLENDI, updatedRecord, updatedRecord.bayi_adi);
     }
 
     return res.json(updatedRecord);
@@ -322,7 +344,7 @@ router.delete('/:id', auth, async (req: Request, res: Response) => {
     // Socket.IO ile tüm bağlı kullanıcılara bildir
     const io = req.app.get('io');
     if (io) {
-      io.emit(SOCKET_EVENTS.ATOLYE_SILINDI, parseInt(id));
+      emitAtolyeEvent(io, SOCKET_EVENTS.ATOLYE_SILINDI, parseInt(id), result.rows[0]?.bayi_adi);
     }
 
     return res.json({ message: 'Kayıt başarıyla silindi' });

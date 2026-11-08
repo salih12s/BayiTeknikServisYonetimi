@@ -3,6 +3,7 @@ import { query } from '../db';
 import authMiddleware from '../middleware/auth';
 import requireIntegerParam from '../middleware/requireIntegerParam';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
+import { emitIslemEvent } from '../services/realtime';
 import logger from '../utils/logger';
 import { orderByText } from '../utils/sqlText';
 import {
@@ -191,7 +192,7 @@ router.post('/form/:token', async (req: Request, res: Response): Promise<void> =
 
     invalidateStatsCache();
     // Ofisteki açık ekranlara yeni kayıt anında düşer.
-    req.app.get('io')?.emit(SOCKET_EVENTS.YENI_ISLEM, islem);
+    emitIslemEvent(req.app.get('io'), SOCKET_EVENTS.YENI_ISLEM, islem);
 
     res.status(201).json({ message: 'Kaydınız alındı', sira_no: islem.id });
   } catch (error) {

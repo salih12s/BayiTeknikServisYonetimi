@@ -5,6 +5,11 @@ import auth from '../middleware/auth';
 import { Bayi } from '../types';
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
+import { DEFAULT_BAYI_PASSWORD, hashBayiPassword } from '../services/bayiPasswords';
+import { forgetAccountStatus } from '../services/accountStatus';
+
+/** Cevaplarda şifre (hash dahil) ASLA gönderilmez. */
+const BAYI_COLUMNS = 'id, isim, username, created_at';
 
 const router = express.Router();
 router.param('id', requireIntegerParam);
@@ -13,7 +18,7 @@ router.param('id', requireIntegerParam);
 router.get('/', auth, async (_req: Request, res: Response) => {
   try {
     const result = await query<Bayi>(
-      `SELECT * FROM bayiler ORDER BY ${orderByText('isim')}`
+      `SELECT ${BAYI_COLUMNS} FROM bayiler ORDER BY ${orderByText('isim')}`
     );
     res.json(result.rows);
   } catch (error) {
@@ -32,10 +37,11 @@ router.post('/', auth, async (req: Request, res: Response) => {
     }
 
     const username = isim.trim();
-    const password = '123456'; // Varsayılan şifre
+    // Müşterinin isteğiyle bütün bayilerin şifresi 123456; ama düz metin değil, bcrypt saklanır.
+    const password = await hashBayiPassword(DEFAULT_BAYI_PASSWORD);
 
     const result = await query<Bayi>(
-      'INSERT INTO bayiler (isim, username, password) VALUES ($1, $2, $3) RETURNING *',
+      `INSERT INTO bayiler (isim, username, password) VALUES ($1, $2, $3) RETURNING ${BAYI_COLUMNS}`,
       [username, username, password]
     );
 
@@ -62,7 +68,7 @@ router.put('/:id', auth, async (req: Request, res: Response) => {
     }
 
     const result = await updateReturning<Bayi>(
-      'UPDATE bayiler SET isim = $1 WHERE id = $2 RETURNING *',
+      `UPDATE bayiler SET isim = $1 WHERE id = $2 RETURNING ${BAYI_COLUMNS}`,
       [isim.trim(), id]
     );
 
@@ -88,13 +94,14 @@ router.delete('/:id', auth, async (req: Request, res: Response) => {
     const { id } = req.params;
 
     const result = await query(
-      'DELETE FROM bayiler WHERE id = $1 RETURNING *',
+      `DELETE FROM bayiler WHERE id = $1 RETURNING ${BAYI_COLUMNS}`,
       [id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Bayi bulunamadı' });
     }
+    forgetAccountStatus('bayi', Number(id)); // silinen bayinin bileti hemen geçersiz
 
     return res.json({ message: 'Bayi başarıyla silindi' });
   } catch (error) {

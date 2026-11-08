@@ -24,6 +24,9 @@ describe('bayi kayıt linki (API + MariaDB)', options, () => {
   const tokenFor = (role: string): string => jwt.sign({ id: 1, username: `itest_${role}`, role }, JWT_SECRET, { expiresIn: '1h' });
 
   before(async () => {
+    // Bu test hesap durumunu sınamıyor: bilet sahibinin hesabı "aktif" sayılır (Fake).
+    // Hesap durumu gerçek veritabanıyla security.integration.test.ts içinde sınanır.
+    (await import('../services/accountStatus')).setAccountLookupForTests(async () => true);
     process.env.JWT_SECRET = JWT_SECRET;
     db = await import('../db');
     const module = await import('./bayiKayit');

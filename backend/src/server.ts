@@ -7,24 +7,12 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
-import authRoutes from './routes/auth';
-import islemlerRoutes from './routes/islemler';
-import teknisyenlerRoutes from './routes/teknisyenler';
-import markalarRoutes from './routes/markalar';
-import bayilerRoutes from './routes/bayiler';
-import atolyeRoutes from './routes/atolye';
-import adminRoutes from './routes/admin';
-import montajlarRoutes from './routes/montajlar';
-import aksesuarlarRoutes from './routes/aksesuarlar';
-import urunlerRoutes from './routes/urunler';
-import locationsRoutes from './routes/locations';
-import printerSettingsRoutes from './routes/printerSettings';
-import sahaRoutes from './routes/saha';
-import karalisteRoutes from './routes/karaliste';
-import bayiKayitRoutes from './routes/bayiKayit';
 import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import clientLogRoutes from './routes/clientLog';
+import { mountApiRoutes } from './routes';
+import { setupSocketAuth } from './services/realtime';
+import { hashPlaintextBayiPasswords } from './services/bayiPasswords';
 import { sweepPhotoStorageInBackground } from './services/sahaPhoto.service';
 
 dotenv.config();
@@ -98,8 +86,10 @@ app.use('/api/bayi-kayit/form', express.json({ limit: '20kb' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Socket.IO'yu app'e ekle. (Her bağlanıp ayrılmayı yazan satırlar kaldırıldı: logu
-// dolduruyor, gerçek hataları gömüyordu.)
+// Canlı güncelleme: bağlanırken bilet zorunlu, olaylar role göre odalara gider
+// (services/realtime.ts). Socket.IO'yu app'e ekle. (Her bağlanıp ayrılmayı yazan
+// satırlar kaldırıldı: logu dolduruyor, gerçek hataları gömüyordu.)
+setupSocketAuth(io);
 app.set('io', io);
 
 // API yanıtları kişiye özeldir ve her an değişir: tarayıcı da aradaki katmanlar da
@@ -109,23 +99,8 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/islemler', islemlerRoutes);
-app.use('/api/teknisyenler', teknisyenlerRoutes);
-app.use('/api/markalar', markalarRoutes);
-app.use('/api/bayiler', bayilerRoutes);
-app.use('/api/atolye', atolyeRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/montajlar', montajlarRoutes);
-app.use('/api/aksesuarlar', aksesuarlarRoutes);
-app.use('/api/urunler', urunlerRoutes);
-app.use('/api/ilceler', locationsRoutes);
-app.use('/api/locations/ilceler', locationsRoutes);
-app.use('/api/printer-settings', printerSettingsRoutes);
-app.use('/api/saha', sahaRoutes);
-app.use('/api/karaliste', karalisteRoutes);
-app.use('/api/bayi-kayit', bayiKayitRoutes);
+// Rotalar ve izin tablosu (hangi rol neyi yapabilir): routes/index.ts
+mountApiRoutes(app);
 
 // Global error handler — asyncHandler ile sarılmış route'lardan gelen
 // yakalanmamış promise rejection'larını yakalar. Tüm route mount'larından
@@ -206,6 +181,12 @@ server.listen(PORT, () => {
 // Silme işlemleri kendi temizliğini hemen tetikler; bu zamanlayıcı yarıda kalanları
 // (ör. R2'ye o an ulaşılamadıysa) ve süresi dolan yüklemeleri toplar.
 setTimeout(sweepPhotoStorageInBackground, 60 * 1000).unref();
+
+// Düz metin kalmış bayi şifrelerini bcrypt'e çevirir (bir kez iş yapar, sonra hiçbir şeye
+// dokunmaz). Açılışı bekletmez.
+setTimeout(() => {
+  hashPlaintextBayiPasswords().catch((error) => console.error('Bayi şifreleri şifrelenemedi:', error));
+}, 5 * 1000).unref();
 setInterval(sweepPhotoStorageInBackground, 60 * 60 * 1000).unref();
 
 export { app, io };

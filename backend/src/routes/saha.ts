@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query, transaction, updateReturning } from '../db';
 import authenticateToken from '../middleware/auth';
+import { forgetAccountStatus } from '../services/accountStatus';
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
 import {
@@ -273,8 +274,9 @@ router.patch('/users/:id/toggle', authenticateToken, requireAdmin, async (req: R
       res.status(404).json({ message: 'Saha elemanı bulunamadı' });
       return;
     }
+    forgetAccountStatus('saha', Number(req.params.id)); // pasif yapıldıysa bilet hemen geçersiz
 
-    res.json({ 
+    res.json({
       message: result.rows[0].is_active ? 'Saha elemanı aktif edildi' : 'Saha elemanı pasif edildi',
       user: result.rows[0]
     });
@@ -297,6 +299,7 @@ router.delete('/users/:id', authenticateToken, requireAdmin, async (req: Request
       await tx.query('DELETE FROM saha_elemanlari WHERE id = $1', [id]);
     });
     sweepPhotoStorageInBackground();
+    forgetAccountStatus('saha', Number(id));
 
     res.json({ message: 'Saha elemanı başarıyla silindi' });
   } catch (error) {

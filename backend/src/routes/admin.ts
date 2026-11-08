@@ -3,6 +3,11 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query, updateReturning } from '../db';
 import authenticateToken from '../middleware/auth';
+import { requireRole } from '../middleware/requireRole';
+import { forgetAccountStatus } from '../services/accountStatus';
+
+// /login dışındaki bütün uçlar yalnız yöneticiye açıktır (eskiden giriş yapmış herkese açıktı).
+const adminOnly = requireRole('admin');
 import logger from '../utils/logger';
 import requireIntegerParam from '../middleware/requireIntegerParam';
 
@@ -56,7 +61,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 // Kullanıcı Oluştur (Sadece Admin)
-router.post('/create-user', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.post('/create-user', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username, password } = req.body;
 
@@ -91,7 +96,7 @@ router.post('/create-user', authenticateToken, async (req: Request, res: Respons
 });
 
 // Tüm Kullanıcıları Listele
-router.get('/users', authenticateToken, async (_req: Request, res: Response): Promise<void> => {
+router.get('/users', authenticateToken, adminOnly, async (_req: Request, res: Response): Promise<void> => {
   try {
     const users = await query(
       `SELECT 
@@ -114,7 +119,7 @@ router.get('/users', authenticateToken, async (_req: Request, res: Response): Pr
 });
 
 // Kullanıcıyı Aktif/Pasif Yap
-router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.patch('/users/:id/toggle', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
@@ -127,6 +132,7 @@ router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: R
       res.status(404).json({ message: 'Kullanıcı bulunamadı' });
       return;
     }
+    forgetAccountStatus('user', Number(id)); // pasif yapıldıysa elindeki bilet hemen geçersiz
 
     res.json({ 
       message: result.rows[0].is_active ? 'Kullanıcı aktif edildi' : 'Kullanıcı pasif edildi',
@@ -139,11 +145,12 @@ router.patch('/users/:id/toggle', authenticateToken, async (req: Request, res: R
 });
 
 // Kullanıcıyı Sil
-router.delete('/users/:id', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.delete('/users/:id', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
     await query('DELETE FROM users WHERE id = $1', [id]);
+    forgetAccountStatus('user', Number(id));
 
     res.json({ message: 'Kullanıcı başarıyla silindi' });
   } catch (error) {
@@ -153,7 +160,7 @@ router.delete('/users/:id', authenticateToken, async (req: Request, res: Respons
 });
 
 // Kullanıcının Kayıtlarını Getir (İşlemler)
-router.get('/user-records/:username', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/user-records/:username', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username } = req.params;
 
@@ -185,7 +192,7 @@ router.get('/user-records/:username', authenticateToken, async (req: Request, re
 });
 
 // Kullanıcının Atölye Kayıtlarını Getir
-router.get('/user-atolye-records/:username', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/user-atolye-records/:username', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username } = req.params;
 
@@ -221,7 +228,7 @@ router.get('/user-atolye-records/:username', authenticateToken, async (req: Requ
 });
 
 // Tüm İşlemleri Getir (Admin için - tamamlananlar dahil düzenlenebilir)
-router.get('/all-records', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/all-records', authenticateToken, adminOnly, async (req: Request, res: Response): Promise<void> => {
   try {
     const pageNum = Math.max(1, parseInt(req.query.page as string) || 1);
     const limitNum = Math.min(500, Math.max(1, parseInt(req.query.limit as string) || 100));
